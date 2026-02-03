@@ -3,10 +3,8 @@ pragma solidity ^0.8.20;
 
 import {Script, console2} from "forge-std/Script.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
-import {MockPriceFeed} from "../test/mocks/MockPriceFeed.sol";
 import {LendingToken} from "../src/lending/LendingToken.sol";
 import {Comptroller} from "../src/lending/Comptroller.sol";
-import {PriceOracle} from "../src/oracle/PriceOracle.sol";
 
 contract ReproFullLendingLifecycle is Script {
     function run() external {
@@ -18,23 +16,16 @@ contract ReproFullLendingLifecycle is Script {
         address bob = vm.addr(bobPk);
 
         address comptrollerAddr = vm.envAddress("COMPTROLLER");
-        address priceOracleAddr = vm.envAddress("PRICE_ORACLE");
         address usdcAddr = vm.envAddress("USDC");
         address wethAddr = vm.envAddress("WETH");
         address dUsdcAddr = vm.envAddress("DUSDC");
         address dWethAddr = vm.envAddress("DWETH");
 
         Comptroller comptroller = Comptroller(comptrollerAddr);
-        PriceOracle oracle = PriceOracle(priceOracleAddr);
         MockERC20 usdc = MockERC20(usdcAddr);
         MockERC20 weth = MockERC20(wethAddr);
         LendingToken dUSDC = LendingToken(dUsdcAddr);
         LendingToken dWETH = LendingToken(dWethAddr);
-
-        address usdcFeedAddr = oracle.getAssetSource(usdcAddr);
-        address wethFeedAddr = oracle.getAssetSource(wethAddr);
-        MockPriceFeed usdcFeed = MockPriceFeed(usdcFeedAddr);
-        MockPriceFeed wethFeed = MockPriceFeed(wethFeedAddr);
 
         // Ensure Alice and Bob have ETH for gas
         vm.startBroadcast(adminPk);
@@ -70,11 +61,9 @@ contract ReproFullLendingLifecycle is Script {
         dUSDC.borrow(5_000e18);
         vm.stopBroadcast();
 
-        // 4) Time passes, refresh feeds, accrue interest
+        // 4) Time passes, accrue interest
         vm.warp(block.timestamp + 365 days);
         vm.startBroadcast(adminPk);
-        usdcFeed.refresh();
-        wethFeed.refresh();
         dUSDC.accrueInterest();
         vm.stopBroadcast();
 

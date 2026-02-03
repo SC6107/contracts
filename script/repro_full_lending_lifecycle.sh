@@ -27,35 +27,29 @@ fi
 
 export FOUNDRY_DISABLE_NIGHTLY_WARNING
 
-read -r COMPTROLLER PRICE_ORACLE <<<"$(python - <<PY
+PROXIES="$(python - <<PY
 import json
 path = "${RUN_JSON}"
 with open(path, "r") as f:
     data = json.load(f)
 creates = [t for t in data.get("transactions", []) if t.get("transactionType") == "CREATE"]
-
-def find_proxy(impl_name):
-    impl = next((t for t in creates if t.get("contractName") == impl_name), None)
-    if not impl:
-        return ""
-    impl_addr = impl["contractAddress"].lower()
-    for t in creates:
-        if t.get("contractName") != "ERC1967Proxy":
-            continue
-        args = t.get("arguments") or []
-        if len(args) >= 1 and str(args[0]).lower() == impl_addr:
-            return t["contractAddress"]
-    return ""
-
-comptroller = find_proxy("Comptroller")
-price_oracle = find_proxy("PriceOracle")
-
-print(comptroller, price_oracle)
+proxies = [t.get("contractAddress") for t in creates if t.get("contractName") == "ERC1967Proxy"]
+print(" ".join([p for p in proxies if p]))
 PY
 )"
 
-if [[ -z "${COMPTROLLER}" || -z "${PRICE_ORACLE}" ]]; then
-  echo "Failed to resolve Comptroller or PriceOracle from ${RUN_JSON}" >&2
+COMPTROLLER=""
+for proxy in ${PROXIES}; do
+  if MARKETS_RAW=$(cast call "${proxy}" "getAllMarkets()(address[])" --rpc-url "${RPC_URL}" 2>/dev/null); then
+    if [[ -n "${MARKETS_RAW}" ]]; then
+      COMPTROLLER="${proxy}"
+      break
+    fi
+  fi
+done
+
+if [[ -z "${COMPTROLLER}" ]]; then
+  echo "Failed to resolve Comptroller from ${RUN_JSON}" >&2
   exit 1
 fi
 
@@ -89,7 +83,7 @@ if [[ -z "${USDC}" || -z "${WETH}" || -z "${DUSDC}" || -z "${DWETH}" ]]; then
   exit 1
 fi
 
-export ADMIN_PK ALICE_PK BOB_PK COMPTROLLER PRICE_ORACLE USDC WETH DUSDC DWETH
+export ADMIN_PK ALICE_PK BOB_PK COMPTROLLER USDC WETH DUSDC DWETH
 
 forge script script/repro_full_lending_lifecycle.s.sol:ReproFullLendingLifecycle \
   --rpc-url "${RPC_URL}" \
