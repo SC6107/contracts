@@ -289,13 +289,50 @@ forge test --match-path test/integration/FullProtocol.t.sol
 
 Deployment:
 - `script/DeployProtocol.s.sol`
+- `script/deploy_local.sh` (starts Anvil, deploys locally)
 
 Upgrade flow example:
 - `script/UpgradeProtocol.s.sol`
+- `script/test_upgrade_local.sh` (local upgrade test helper)
 
 Run a script:
 ```shell
 forge script script/DeployProtocol.s.sol:DeployProtocolScript --rpc-url <RPC> --private-key <KEY>
+```
+
+Run an upgrade (example: PriceOracle):
+```shell
+forge script script/UpgradeProtocol.s.sol:UpgradeProtocol \
+  --sig "upgradePriceOracle(address)" <PROXY_ADDRESS> \
+  --rpc-url <RPC> --private-key <KEY>
+```
+
+Network upgrade (direct UUPS call):
+```shell
+RPC_URL=<RPC> \
+PRIVATE_KEY=<DEPLOYER_PK> \
+PROXY_ADDRESS=<PROXY_ADDRESS> \
+UPGRADE_KIND=price_oracle \
+CONFIRM_NETWORK=YES \
+script/upgrade_network.sh
+```
+Notes:
+- This only works if the proxy owner is the key you provide.
+- In production, upgrades should go through governance + timelock.
+
+Local deploy (Anvil):
+```shell
+script/deploy_local.sh
+```
+
+Local upgrade test (assumes deployed):
+```shell
+script/test_upgrade_local.sh
+```
+
+Local upgrade test with explicit proxy:
+```shell
+PRICE_ORACLE_PROXY=<proxy> script/test_upgrade_local.sh
 ```
 
 ---
