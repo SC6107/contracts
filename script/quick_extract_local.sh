@@ -20,7 +20,7 @@ fi
 
 export FOUNDRY_DISABLE_NIGHTLY_WARNING
 
-read -r COMPTROLLER PRICE_ORACLE GOVERNANCE_TOKEN TIMELOCK GOVERNOR <<<"$(python - <<PY
+read -r PRICE_ORACLE GOVERNANCE_TOKEN TIMELOCK GOVERNOR <<<"$(python - <<PY
 import json
 path = "${RUN_JSON}"
 with open(path, "r") as f:
@@ -40,15 +40,35 @@ def find_proxy(impl_name):
             return t["contractAddress"]
     return ""
 
-comptroller = find_proxy("Comptroller")
 price_oracle = find_proxy("PriceOracle")
 governance_token = find_proxy("GovernanceToken")
 timelock = find_proxy("ProtocolTimelock")
 governor = find_proxy("ProtocolGovernor")
 
-print(comptroller, price_oracle, governance_token, timelock, governor)
+print(price_oracle, governance_token, timelock, governor)
 PY
 )"
+
+PROXIES="$(python - <<PY
+import json
+path = "${RUN_JSON}"
+with open(path, "r") as f:
+    data = json.load(f)
+creates = [t for t in data.get("transactions", []) if t.get("transactionType") == "CREATE"]
+proxies = [t.get("contractAddress") for t in creates if t.get("contractName") == "ERC1967Proxy"]
+print(" ".join([p for p in proxies if p]))
+PY
+)"
+
+COMPTROLLER=""
+for proxy in ${PROXIES}; do
+  if MARKETS_RAW=$(cast call "${proxy}" "getAllMarkets()(address[])" --rpc-url "${RPC_URL}" 2>/dev/null); then
+    if [[ -n "${MARKETS_RAW}" ]]; then
+      COMPTROLLER="${proxy}"
+      break
+    fi
+  fi
+done
 
 if [[ -z "${COMPTROLLER}" || -z "${PRICE_ORACLE}" ]]; then
   echo "Failed to resolve Comptroller or PriceOracle from ${RUN_JSON}" >&2

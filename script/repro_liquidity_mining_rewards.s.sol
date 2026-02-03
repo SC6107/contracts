@@ -26,6 +26,31 @@ contract ReproLiquidityMiningRewards is Script {
         LendingToken dUSDC = LendingToken(dUsdcAddr);
         LiquidityMining usdcMining = LiquidityMining(usdcMiningAddr);
 
+        console2.log("Configuration");
+        console2.log("  GOV owner:", govToken.owner());
+        console2.log("  GOV minter:", govToken.minter());
+        console2.log("  Mining owner:", usdcMining.owner());
+        console2.log("  Mining rewardsDistributor:", usdcMining.rewardsDistributor());
+        console2.log("  Mining stakingToken:", usdcMining.stakingToken());
+        console2.log("  Mining rewardsToken:", usdcMining.rewardsToken());
+        console2.log("  rewardsDuration:", usdcMining.rewardsDuration());
+        console2.log("  rewardRate:", usdcMining.rewardRate());
+        console2.log("  periodFinish:", usdcMining.periodFinish());
+
+        if (usdcMining.stakingToken() != dUsdcAddr) {
+            console2.log("ERROR: stakingToken does not match dUSDC. Aborting.");
+            return;
+        }
+        if (usdcMining.rewardsToken() != govTokenAddr) {
+            console2.log("ERROR: rewardsToken does not match GOV. Aborting.");
+            return;
+        }
+        if (admin != govToken.owner() || admin != usdcMining.rewardsDistributor()) {
+            console2.log("ERROR: ADMIN_PK is not the GOV owner or rewards distributor.");
+            console2.log("Set ADMIN_PK to the deployer key used in FullSetupLocal.");
+            return;
+        }
+
         console2.log("Initial Balances");
         console2.log("  Alice USDC:", usdc.balanceOf(alice));
         console2.log("  Bob USDC:", usdc.balanceOf(bob));
@@ -56,9 +81,26 @@ contract ReproLiquidityMiningRewards is Script {
         console2.log("GOV Token:", govTokenAddr);
 
         // 1) Fund mining contract with rewards
-        vm.startBroadcast(adminPk);
-        govToken.mint(address(usdcMining), 30_000e18);
-        vm.stopBroadcast();
+        uint256 reward = 30_000e18;
+        uint256 balanceBefore = govToken.balanceOf(address(usdcMining));
+        uint256 duration = usdcMining.rewardsDuration();
+        uint256 periodFinish = usdcMining.periodFinish();
+        uint256 rewardRate = usdcMining.rewardRate();
+        uint256 required = reward;
+        if (block.timestamp < periodFinish) {
+            uint256 remaining = periodFinish - block.timestamp;
+            uint256 leftover = remaining * rewardRate;
+            required = reward + leftover;
+        }
+        if (balanceBefore < required) {
+            uint256 topUp = required - balanceBefore;
+            console2.log("Funding rewards (top up):", topUp);
+            vm.startBroadcast(adminPk);
+            govToken.mint(address(usdcMining), topUp);
+            vm.stopBroadcast();
+        } else {
+            console2.log("Mining contract already funded. Balance:", balanceBefore);
+        }
 
         console2.log("After Funding Rewards");
         console2.log("  Mining GOV balance:", govToken.balanceOf(address(usdcMining)));

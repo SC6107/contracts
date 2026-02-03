@@ -17,7 +17,23 @@ if [[ "${SKIP_DEPLOY}" != "1" ]]; then
 fi
 
 if [[ -z "${PRICE_ORACLE_PROXY}" ]]; then
-  RUN_JSON=$(ls -t broadcast/DeployProtocol.s.sol/*/run-latest.json 2>/dev/null | head -n 1 || true)
+  if [[ -x script/quick_extract_local.sh ]]; then
+    ENV_OUTPUT=$(script/quick_extract_local.sh 2>/dev/null || true)
+    if [[ -n "${ENV_OUTPUT}" ]]; then
+      # shellcheck disable=SC1090
+      eval "${ENV_OUTPUT}"
+      if [[ -n "${PRICE_ORACLE:-}" ]]; then
+        PRICE_ORACLE_PROXY="${PRICE_ORACLE}"
+      fi
+    fi
+  fi
+fi
+
+if [[ -z "${PRICE_ORACLE_PROXY}" ]]; then
+  RUN_JSON=$(ls -t broadcast/FullSetupLocal.s.sol/*/run-latest.json 2>/dev/null | head -n 1 || true)
+  if [[ -z "${RUN_JSON}" ]]; then
+    RUN_JSON=$(ls -t broadcast/DeployProtocol.s.sol/*/run-latest.json 2>/dev/null | head -n 1 || true)
+  fi
   if [[ -z "${RUN_JSON}" ]]; then
     echo "No broadcast file found. Set PRICE_ORACLE_PROXY or run deploy."
     exit 1
@@ -59,6 +75,11 @@ echo "PriceOracle proxy: ${PRICE_ORACLE_PROXY}"
 
 if command -v cast >/dev/null 2>&1; then
   echo "Version before:"
+  if ! cast call "${PRICE_ORACLE_PROXY}" "version()(uint256)" --rpc-url "${RPC_URL}" >/dev/null; then
+    echo "PriceOracle proxy does not respond to version()." >&2
+    echo "The broadcast file may be stale for this chain. Re-run FullSetupLocal or set PRICE_ORACLE_PROXY." >&2
+    exit 1
+  fi
   cast call "${PRICE_ORACLE_PROXY}" "version()(uint256)" --rpc-url "${RPC_URL}"
 fi
 
