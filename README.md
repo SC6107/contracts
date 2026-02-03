@@ -339,7 +339,7 @@ PRICE_ORACLE_PROXY=<proxy> script/test_upgrade_local.sh
 ## Key Parameters (Glossary)
 
 - `LTV`: loan‑to‑value ratio (borrow limit vs collateral)
-- `Liquidation threshold`: debt level at which liquidation is allowed
+- `Liquidation threshold`: in this setup it equals the collateral factor (Compound‑style)
 - `Health factor`: safety ratio; below 1 is liquidatable
 - `Reserve factor`: portion of interest retained by the protocol
 - `Utilization`: borrows / (cash + borrows − reserves)
@@ -357,11 +357,11 @@ From `requirement.md`, not yet implemented:
 
 ## Walkthrough Example (from `test/integration/FullProtocol.t.sol`)
 
-Assumptions used in the integration suite:
+Assumptions used in the integration suite (Compound‑style liquidation threshold = collateral factor):
 - USDC price = $1
 - WETH price = $2,000
-- USDC: LTV 75%, liquidation threshold 80%, liquidation bonus 1.05
-- WETH: LTV 80%, liquidation threshold 85%, liquidation bonus 1.05
+- USDC: collateral factor 75%, liquidation bonus 1.05
+- WETH: collateral factor 80%, liquidation bonus 1.05
 - Close factor = 50%
 
 ### `test_FullLendingLifecycle`
