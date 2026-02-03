@@ -8,12 +8,18 @@ import {JumpRateModel} from "../src/lending/JumpRateModel.sol";
 import {PriceOracle} from "../src/oracle/PriceOracle.sol";
 import {LendingToken} from "../src/lending/LendingToken.sol";
 import {Comptroller} from "../src/lending/Comptroller.sol";
+import {GovernanceToken} from "../src/governance/GovernanceToken.sol";
+import {ProtocolTimelock} from "../src/governance/ProtocolTimelock.sol";
+import {ProtocolGovernor} from "../src/governance/ProtocolGovernor.sol";
+import {LiquidityMining} from "../src/mining/LiquidityMining.sol";
+import {IVotes} from "@openzeppelin/contracts/governance/utils/IVotes.sol";
+import {TimelockControllerUpgradeable} from "@openzeppelin/contracts-upgradeable/governance/TimelockControllerUpgradeable.sol";
 import {MockERC20} from "../test/mocks/MockERC20.sol";
 import {MockPriceFeed} from "../test/mocks/MockPriceFeed.sol";
 
 /**
  * @title FullSetupLocal
- * @notice Local-only setup: mocks + oracle + comptroller + lending tokens
+ * @notice Local-only setup: mocks + oracle + comptroller + lending tokens + governance + mining
  * @dev Comptroller flow (interact directly with LendingToken markets)
  */
 contract FullSetupLocal is Script {
@@ -34,6 +40,15 @@ contract FullSetupLocal is Script {
     uint256 internal constant MULTIPLIER_PER_YEAR = 0.1e18; // 10%
     uint256 internal constant JUMP_MULTIPLIER_PER_YEAR = 1e18; // 100%
     uint256 internal constant KINK = 0.8e18; // 80% utilization
+
+    // Governance / mining config
+    uint256 internal constant GOV_TOKEN_MAX_SUPPLY = 100_000_000e18;
+    uint256 internal constant REWARDS_DURATION = 30 days;
+    uint256 internal constant TIMELOCK_DELAY = 1 days;
+    uint48 internal constant VOTING_DELAY = 1 days;
+    uint32 internal constant VOTING_PERIOD = 1 weeks;
+    uint256 internal constant PROPOSAL_THRESHOLD = 100_000e18;
+    uint256 internal constant QUORUM_PERCENTAGE = 4;
 
     // Mint amount for test accounts
     uint256 internal constant INITIAL_BALANCE = 100_000e18;
@@ -110,7 +125,89 @@ contract FullSetupLocal is Script {
         comptroller.supportMarket(address(dUSDC), USDC_COLLATERAL_FACTOR);
         comptroller.supportMarket(address(dWETH), WETH_COLLATERAL_FACTOR);
 
-        // 7) Mint tokens to test accounts
+        // 7) Deploy governance token (proxy)
+        GovernanceToken governanceToken = GovernanceToken(
+            address(
+                new ERC1967Proxy(
+                    address(new GovernanceToken()),
+                    abi.encodeCall(
+                        GovernanceToken.initialize,
+                        ("Protocol Governance Token", "GOV", deployer, GOV_TOKEN_MAX_SUPPLY)
+                    )
+                )
+            )
+        );
+
+        // 8) Deploy timelock (proxy)
+        address[] memory proposers = new address[](1);
+        address[] memory executors = new address[](1);
+        proposers[0] = deployer; // temporary
+        executors[0] = address(0); // anyone can execute
+
+        ProtocolTimelock timelock = ProtocolTimelock(
+            payable(
+                address(
+                    new ERC1967Proxy(
+                        address(new ProtocolTimelock()),
+                        abi.encodeCall(ProtocolTimelock.initialize, (TIMELOCK_DELAY, proposers, executors, deployer))
+                    )
+                )
+            )
+        );
+
+        // 9) Deploy governor (proxy)
+        ProtocolGovernor governor = ProtocolGovernor(
+            payable(
+                address(
+                    new ERC1967Proxy(
+                        address(new ProtocolGovernor()),
+                        abi.encodeCall(
+                            ProtocolGovernor.initialize,
+                            (
+                                IVotes(address(governanceToken)),
+                                TimelockControllerUpgradeable(payable(address(timelock))),
+                                VOTING_DELAY,
+                                VOTING_PERIOD,
+                                PROPOSAL_THRESHOLD,
+                                QUORUM_PERCENTAGE
+                            )
+                        )
+                    )
+                )
+            )
+        );
+
+        // 10) Grant governor roles on timelock
+        bytes32 proposerRole = TimelockControllerUpgradeable(payable(address(timelock))).PROPOSER_ROLE();
+        bytes32 cancellerRole = TimelockControllerUpgradeable(payable(address(timelock))).CANCELLER_ROLE();
+        TimelockControllerUpgradeable(payable(address(timelock))).grantRole(proposerRole, address(governor));
+        TimelockControllerUpgradeable(payable(address(timelock))).grantRole(cancellerRole, address(governor));
+
+        // 11) Deploy liquidity mining (dUSDC + dWETH)
+        LiquidityMining usdcMining = LiquidityMining(
+            address(
+                new ERC1967Proxy(
+                    address(new LiquidityMining()),
+                    abi.encodeCall(
+                        LiquidityMining.initialize,
+                        (deployer, address(dUSDC), address(governanceToken), REWARDS_DURATION)
+                    )
+                )
+            )
+        );
+        LiquidityMining wethMining = LiquidityMining(
+            address(
+                new ERC1967Proxy(
+                    address(new LiquidityMining()),
+                    abi.encodeCall(
+                        LiquidityMining.initialize,
+                        (deployer, address(dWETH), address(governanceToken), REWARDS_DURATION)
+                    )
+                )
+            )
+        );
+
+        // 12) Mint tokens to test accounts
         _mintToTestAccounts(usdc, deployer);
         _mintToTestAccounts(weth, deployer);
 
@@ -127,6 +224,11 @@ contract FullSetupLocal is Script {
         console2.log("InterestRateModel:", address(interestRateModel));
         console2.log("dUSDC:", address(dUSDC));
         console2.log("dWETH:", address(dWETH));
+        console2.log("GovernanceToken:", address(governanceToken));
+        console2.log("ProtocolTimelock:", address(timelock));
+        console2.log("ProtocolGovernor:", address(governor));
+        console2.log("USDC Mining:", address(usdcMining));
+        console2.log("WETH Mining:", address(wethMining));
     }
 
     function _mintToTestAccounts(MockERC20 token, address deployer) internal {

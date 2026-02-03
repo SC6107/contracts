@@ -20,7 +20,7 @@ fi
 
 export FOUNDRY_DISABLE_NIGHTLY_WARNING
 
-read -r COMPTROLLER PRICE_ORACLE <<<"$(python - <<PY
+read -r COMPTROLLER PRICE_ORACLE GOVERNANCE_TOKEN TIMELOCK GOVERNOR <<<"$(python - <<PY
 import json
 path = "${RUN_JSON}"
 with open(path, "r") as f:
@@ -42,8 +42,11 @@ def find_proxy(impl_name):
 
 comptroller = find_proxy("Comptroller")
 price_oracle = find_proxy("PriceOracle")
+governance_token = find_proxy("GovernanceToken")
+timelock = find_proxy("ProtocolTimelock")
+governor = find_proxy("ProtocolGovernor")
 
-print(comptroller, price_oracle)
+print(comptroller, price_oracle, governance_token, timelock, governor)
 PY
 )"
 
@@ -86,14 +89,49 @@ fi
 USDC_FEED=$(cast call "${PRICE_ORACLE}" "getAssetSource(address)(address)" "${USDC}" --rpc-url "${RPC_URL}")
 WETH_FEED=$(cast call "${PRICE_ORACLE}" "getAssetSource(address)(address)" "${WETH}" --rpc-url "${RPC_URL}")
 
+USDC_MINING=""
+WETH_MINING=""
+MINING_PROXIES=$(python - <<PY
+import json
+path = "${RUN_JSON}"
+with open(path, "r") as f:
+    data = json.load(f)
+creates = [t for t in data.get("transactions", []) if t.get("transactionType") == "CREATE"]
+mining_impls = [t for t in creates if t.get("contractName") == "LiquidityMining"]
+impl_addrs = {m.get("contractAddress","").lower() for m in mining_impls}
+proxies = []
+for t in creates:
+    if t.get("contractName") != "ERC1967Proxy":
+        continue
+    args = t.get("arguments") or []
+    if len(args) >= 1 and str(args[0]).lower() in impl_addrs:
+        proxies.append(t.get("contractAddress"))
+print(" ".join(proxies))
+PY
+)
+
+for proxy in ${MINING_PROXIES}; do
+  staking=$(cast call "${proxy}" "stakingToken()(address)" --rpc-url "${RPC_URL}")
+  if [[ "$(echo "${staking}" | tr '[:upper:]' '[:lower:]')" == "$(echo "${DUSDC}" | tr '[:upper:]' '[:lower:]')" ]]; then
+    USDC_MINING="${proxy}"
+  elif [[ "$(echo "${staking}" | tr '[:upper:]' '[:lower:]')" == "$(echo "${DWETH}" | tr '[:upper:]' '[:lower:]')" ]]; then
+    WETH_MINING="${proxy}"
+  fi
+done
+
 cat <<OUT
 COMPTROLLER=${COMPTROLLER}
 PRICE_ORACLE=${PRICE_ORACLE}
+GOVERNANCE_TOKEN=${GOVERNANCE_TOKEN}
+PROTOCOL_TIMELOCK=${TIMELOCK}
+PROTOCOL_GOVERNOR=${GOVERNOR}
 USDC=${USDC}
 WETH=${WETH}
 DUSDC=${DUSDC}
 DWETH=${DWETH}
 USDC_FEED=${USDC_FEED}
 WETH_FEED=${WETH_FEED}
+USDC_MINING=${USDC_MINING}
+WETH_MINING=${WETH_MINING}
 RPC_URL=${RPC_URL}
 OUT
