@@ -1,375 +1,248 @@
-## Upgradeable DeFi Protocol Suite (Foundry)
+# Upgradeable DeFi Protocol Suite (Foundry)
 
-This repo contains a full on-chain DeFi protocol built with upgradeable smart contracts.
-It includes:
-- A lending pool (deposit, borrow, repay, withdraw, liquidation)
-- A liquidity mining (staking rewards) module
-- A governance system that controls upgrades through a timelock
-- A price oracle
+An end‑to‑end DeFi protocol built with upgradeable Solidity contracts and tested with Foundry. The suite includes:
+- Lending markets (deposit, borrow, repay, withdraw, liquidation)
+- Liquidity mining (staking rewards)
+- Governance + timelock for upgrades and configuration
+- On‑chain price oracle
 
-It is written in Solidity and tested with Foundry.
-
-If you are new to DeFi, read this top to bottom. It starts with plain concepts and
-ends with contract-by-contract details.
+This repo is intended as a readable, audited-style reference implementation. Start with the Quick Start, then scan Contracts at a Glance.
 
 ---
 
-## Big picture (no jargon)
-
-People deposit tokens into a shared pool. Others can borrow those tokens if they
-put up enough collateral. Borrowers pay interest. Depositors earn interest.
-
-This protocol has three big parts:
-1) Lending pool: where deposits and borrows happen
-2) Liquidity mining: rewards people who stake their deposit tokens
-3) Governance: token holders vote on upgrades and configuration changes
-
-Everything is upgradeable, so the protocol can evolve without losing state.
-Upgrades are controlled by governance and delayed by a timelock.
-
----
-
-## Repo map
-
-Top level:
-- `src/` core protocol contracts
-- `test/` unit + integration tests
-- `script/` deploy and upgrade scripts
-- `lib/` external libraries (OpenZeppelin, forge-std)
-- `foundry.toml` Foundry config
-- `requirement.md` project requirements
-
-Key folders in `src/`:
-- `src/lending/` lending pool and interest logic
-- `src/mining/` staking rewards
-- `src/governance/` governance and timelock
-- `src/oracle/` price oracle
-- `src/interfaces/` shared interfaces
-- `src/libraries/` math, errors, and storage helpers
-
----
-
-## Core ideas you should know
-
-### 1) Deposits create receipt tokens
-When you deposit USDC into the pool, you receive a receipt token (like a share).
-Here the receipt token is called `LendingToken` (for example `dUSDC`).
-You can redeem it later for your original deposit plus interest.
-
-### 2) Borrowing uses collateral
-To borrow, you must deposit collateral. The protocol checks the value of your
-collateral vs your debt using the price oracle. If your health factor falls too
-low, your position can be liquidated.
-
-### 3) Interest grows over time
-Borrowers pay interest. Interest is calculated using a utilization-based model
-(Compound-style "jump rate model"). When borrowers owe more, the exchange rate
-for depositors increases.
-
-### 4) Upgradable contracts
-These contracts use the UUPS proxy pattern. The proxy holds the data (state).
-The implementation holds the logic. Governance can upgrade the logic while the
-state remains intact.
-
-### 5) Governance and timelock
-The governance token gives voting power. Token holders create proposals and vote.
-If a proposal passes, it goes to a timelock before execution (minimum 24 hours).
-Upgrades are executed by governance after the timelock delay.
-
----
-
-## How the lending flow works (expanded)
-
-### Deposit (step-by-step)
-1) User calls `LendingPoolCore.deposit(asset, amount, onBehalfOf)`
-2) The pool checks that the reserve is active and the amount is non-zero
-3) The pool calls `LendingToken.mint(from, to, amount)`:
-   - Underlying tokens move from the user into the `LendingToken` contract
-   - The `LendingToken` mints receipt shares to the user
-4) The pool marks the asset as collateral for the user by default
-5) The user now holds receipt tokens (`dUSDC`, `dWETH`) that represent a claim
-   on the pool's underlying assets
-
-### Borrow (step-by-step)
-1) User calls `LendingPoolCore.borrow(asset, amount, onBehalfOf)`
-2) The pool asks the price oracle to value the user's collateral and debt
-3) The pool checks the health factor after the new borrow
-4) If the health factor would fall below 1, the transaction reverts
-5) If safe, the pool calls `LendingToken.borrow(borrower, amount)`
-6) The `LendingToken`:
-   - Accrues interest to update indexes
-   - Increases the borrower's principal
-   - Transfers underlying tokens to the borrower
-7) The borrower now owes debt that grows over time
-
-### Repay (step-by-step)
-1) User calls `LendingPoolCore.repay(asset, amount, onBehalfOf)`
-2) The pool calls `LendingToken.repayBorrow(payer, borrower, amount)`
-3) The `LendingToken`:
-   - Accrues interest
-   - Transfers underlying from payer to itself
-   - Reduces the borrower's principal
-4) Debt is reduced immediately
-
-### Withdraw (step-by-step)
-1) User calls `LendingPoolCore.withdraw(asset, amount, to)`
-2) The pool converts the amount into receipt-token shares
-3) The pool checks that the user's health factor stays >= 1
-4) If safe, the pool calls `LendingToken.redeem(from, to, shares)`
-5) The `LendingToken` burns shares and transfers underlying to the user
-
-### Liquidation (step-by-step)
-If a borrower becomes unsafe (health factor < 1):
-1) A liquidator calls `LendingPoolCore.liquidate(...)`
-2) The liquidator repays part of the borrower's debt
-3) The protocol seizes collateral receipt tokens from the borrower
-4) The liquidator receives collateral with a bonus (incentive)
-5) Borrower debt is reduced and the position becomes safer
-
----
-
-## Contracts, by module
-
-### Lending
-
-`src/lending/LendingPoolCore.sol`
-- Main entry point for deposits, borrows, repay, withdraw, and liquidation.
-- Tracks reserves for each supported asset.
-- Calculates health factor and enforces collateral rules.
-- Upgradeable (UUPS).
-
-`src/lending/LendingToken.sol`
-- Receipt token for deposits (similar to Compound cTokens).
-- Keeps track of total borrows, reserves, and the borrow index.
-- Accrues interest over time.
-- Upgradeable (UUPS).
-
-`src/lending/JumpRateModel.sol`
-- Interest rate model with a "kink".
-- When utilization is low, rate grows slowly.
-- When utilization is high, rate grows faster.
-- Non-upgradeable by design (immutable parameters).
-
-Storage helpers:
-- `src/lending/LendingPoolStorage.sol`
-- `src/lending/LendingTokenStorage.sol`
-These isolate storage layout to keep upgrades safe.
-
----
-
-### Liquidity Mining (staking rewards)
-
-`src/mining/LiquidityMining.sol`
-- Users stake their receipt tokens (e.g., dUSDC).
-- Rewards are distributed over time, Synthetix-style.
-- Reward token is the governance token.
-- Upgradeable (UUPS).
-
-`src/mining/LiquidityMiningStorage.sol`
-- Storage layout for staking.
-
----
-
-### Governance
-
-`src/governance/GovernanceToken.sol`
-- ERC20 token with voting power (OpenZeppelin Votes).
-- Upgradeable (UUPS).
-
-`src/governance/ProtocolGovernor.sol`
-- On-chain governance (OpenZeppelin Governor).
-- Handles proposals, voting, and execution.
-- Upgradeable (UUPS).
-
-`src/governance/ProtocolTimelock.sol`
-- Timelock controller that delays execution of governance actions.
-- Minimum delay is 24 hours.
-- Upgradeable (UUPS).
-
----
-
-### Oracle
-
-`src/oracle/PriceOracle.sol`
-- Aggregates price feeds (mocked in tests).
-- Used for health factor and liquidation calculations.
-- Upgradeable (UUPS).
-
----
-
-### Libraries and interfaces
-
-`src/libraries/WadRayMath.sol`
-- Fixed-point math helpers (1e18 and 1e27 precision).
-
-`src/libraries/Errors.sol`
-- Shared custom errors for consistent revert messages.
-
-`src/interfaces/*.sol`
-- Interfaces for the lending pool, oracle, and tokens.
-
----
-
-## Upgradeability (UUPS) explained for beginners (expanded)
-
-Think of a proxy like a permanent address that users interact with.
-The proxy stores all data. The "implementation" is the logic code.
-
-When the protocol upgrades:
-- The proxy keeps the same address and data
-- Governance tells the proxy to use a new implementation
-- Users do not lose balances
-
-This repo uses:
-- UUPS proxies (`UUPSUpgradeable`)
-- Explicit storage layout libraries (ERC-7201 slots)
-- Upgrade authorization guarded by governance/timelock
-
-### UUPS in plain terms
-- The proxy is a thin forwarder that holds all state
-- The implementation contains upgrade logic
-- The proxy delegates calls to the implementation
-- The implementation decides who can upgrade
-
-### Where upgrades happen in this repo
-- Each core contract overrides `_authorizeUpgrade(...)`
-- The timelock is the final authority for upgrades
-- The governor schedules upgrades through the timelock
-
-### Why storage layout matters
-- Upgrades reuse the same storage slots
-- If a new version changes the layout incorrectly, old data gets corrupted
-- This repo isolates storage with `*Storage.sol` libraries to keep layout stable
-
----
-
-## Governance + timelock (expanded)
-
-### The governance token
-`GovernanceToken` is an ERC20 with voting power.
-Users must delegate to themselves (or someone else) to activate votes.
-
-### The governor contract
-`ProtocolGovernor` handles:
-- proposal creation
-- voting windows
-- quorum checks
-- queueing successful proposals
-
-### The timelock
-`ProtocolTimelock` enforces a delay before execution:
-- Minimum delay is 24 hours
-- This gives users time to exit if they disagree with an upgrade
-
-### The full governance flow
-1) Token holders propose an action (for example, upgrade a contract)
-2) There is a voting delay (time before voting starts)
-3) The voting period begins; holders vote "for" or "against"
-4) If quorum and vote thresholds pass, the proposal is queued
-5) The timelock delay passes
-6) The proposal is executed
-
-### How upgrades are governed here
-The upgrade call is encoded as:
-`UUPSUpgradeable.upgradeToAndCall(newImpl, data)`
-The governor schedules that call, then the timelock executes it.
-
----
-
-## Interest rate math (expanded)
-
-This protocol uses a Compound-style "jump rate" model.
-The idea: borrowing gets more expensive as the pool gets more utilized.
-
-### Key definitions
-- Cash: how much underlying is available in the pool
-- Borrows: how much users owe
-- Reserves: protocol-owned funds
-- Utilization = borrows / (cash + borrows - reserves)
-
-### Rates
-- Base rate: minimum borrow rate
-- Multiplier: slope before the kink
-- Jump multiplier: slope after the kink
-- Kink: utilization point where rates rise faster
-
-### What happens as utilization changes?
-Low utilization:
-- Borrowing is cheaper to encourage borrowing
-
-High utilization:
-- Borrowing becomes more expensive to slow demand
-
-### How depositors earn interest
-- Borrowers pay interest
-- The pool's total borrows grow over time
-- The exchange rate for receipt tokens increases
-- When depositors redeem, they get more underlying than they put in
-
-### How interest accrues in code
-The `LendingToken.accrueInterest()` function:
-1) Calculates the borrow rate per second
-2) Computes how much time elapsed
-3) Increases total borrows
-4) Updates the global borrow index
-
-This is why debt grows even if a borrower does nothing.
-
----
-
-## Liquidation mechanics (expanded)
-
-Liquidation is the safety valve that keeps lenders protected.
-If a borrower's position becomes unsafe, anyone can liquidate it.
-
-### The health factor
-The pool calculates a health factor based on:
-- collateral value
-- debt value
-- liquidation threshold
-
-If health factor < 1, the position can be liquidated.
-
-### What a liquidator does
-1) Repays part of the borrower's debt
-2) Receives collateral with a bonus
-3) Helps restore the system's solvency
-
-### Why liquidators are incentivized
-The collateral bonus is the reward. It encourages third parties to keep the
-system healthy by closing risky positions.
-
----
-
-## Tests
-
-Tests are in `test/`:
-- `test/unit/` unit tests for each contract
-- `test/integration/` full protocol flows
-- `test/mocks/` mock ERC20 and price feeds
-
-Key integration test:
-- `test/integration/FullProtocol.t.sol`
-  - deposit/borrow/repay/withdraw
-  - liquidation
-  - interest accrual
-  - governance upgrade flow
-  - storage preservation across upgrades
-
-Run tests:
+## Quick Start
+
+1. Install Foundry
+```shell
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+2. Build
+```shell
+forge build
+```
+
+3. Test
 ```shell
 forge test
 ```
 
 ---
 
+## Repo Layout
+
+Top level:
+- `src/` protocol contracts
+- `test/` unit and integration tests
+- `script/` deploy and upgrade scripts
+- `lib/` external dependencies (OpenZeppelin, forge-std)
+- `foundry.toml` Foundry config
+- `requirement.md` project requirements and gaps
+
+Key `src/` subfolders:
+- `src/lending/` lending pool, cToken logic, interest rate model
+- `src/mining/` liquidity mining
+- `src/governance/` governance and timelock
+- `src/oracle/` price oracle
+- `src/interfaces/` shared interfaces
+- `src/libraries/` math, errors, storage helpers
+
+---
+
+## Contracts at a Glance
+
+Lending:
+- `src/lending/LendingPoolCore.sol` core pool entrypoint for deposits, borrows, repay, withdraw, liquidation (UUPS)
+- `src/lending/LendingToken.sol` receipt token (Compound‑style cToken) with interest accrual (UUPS)
+- `src/lending/Comptroller.sol` risk manager for cTokens (UUPS)
+- `src/lending/JumpRateModel.sol` utilization‑based interest model (immutable params)
+- `src/lending/*Storage.sol` ERC‑7201 storage layout helpers
+
+Liquidity mining:
+- `src/mining/LiquidityMining.sol` staking rewards for receipt tokens (UUPS)
+- `src/mining/LiquidityMiningStorage.sol` storage layout
+
+Governance:
+- `src/governance/GovernanceToken.sol` ERC20Votes token (UUPS)
+- `src/governance/ProtocolGovernor.sol` OpenZeppelin Governor (UUPS)
+- `src/governance/ProtocolTimelock.sol` timelock controller (UUPS)
+
+Oracle:
+- `src/oracle/PriceOracle.sol` price feed aggregation (UUPS)
+
+Libraries:
+- `src/libraries/WadRayMath.sol` fixed‑point math (1e18 and 1e27)
+- `src/libraries/Errors.sol` shared custom errors
+
+---
+
+## How the Lending Flow Works
+
+Deposit:
+- Call `LendingPoolCore.deposit(asset, amount, onBehalfOf)`
+- Pool validates reserve status and amount
+- Pool calls `LendingToken.mint(payer, onBehalfOf, amount)`
+- Underlying is transferred into the token contract and receipt shares are minted
+
+Borrow:
+- Call `LendingPoolCore.borrow(asset, amount, onBehalfOf)`
+- Pool checks price oracle and health factor
+- Pool calls `LendingToken.borrow(borrower, amount)`
+- Borrower receives underlying and debt accrues over time
+
+Repay:
+- Call `LendingPoolCore.repay(asset, amount, onBehalfOf)`
+- Pool calls `LendingToken.repayBorrow(payer, borrower, amount)`
+- Debt is reduced immediately
+
+Withdraw:
+- Call `LendingPoolCore.withdraw(asset, amount, to)`
+- Pool checks health factor after the withdrawal
+- Pool calls `LendingToken.redeem(from, to, shares)`
+
+Liquidation:
+- Call `LendingPoolCore.liquidate(collateralAsset, debtAsset, borrower, debtToCover)`
+- Liquidator repays part of the debt
+- Protocol seizes collateral with a bonus
+
+---
+
+## Upgradeability Model
+
+**UUPS basics**
+UUPS (Universal Upgradeable Proxy Standard) keeps a thin proxy at a stable address and routes calls to an implementation using `delegatecall`. The proxy stores all state; the implementation provides the logic.
+
+**Why this matters**
+- Users never change the address they interact with.
+- Upgrades replace logic without wiping balances or positions.
+- Authorization lives in the implementation via `_authorizeUpgrade(...)`.
+
+**Call flow**
+- User calls proxy address.
+- Proxy `delegatecall`s into the current implementation.
+- Storage reads and writes happen in the proxy’s storage.
+
+**Upgrade flow in this repo**
+1. Governance proposes an upgrade (new implementation address).
+2. Proposal passes voting and is queued in the timelock.
+3. Timelock executes `upgradeToAndCall` on the proxy.
+4. `_authorizeUpgrade(...)` validates the caller (governance/timelock).
+
+**Storage layout rules**
+- State is isolated in `*Storage.sol` libraries.
+- Slots follow ERC‑7201 to minimize collisions.
+- New versions must only append fields to existing storage structs.
+- Constructors are disabled; `initialize(...)` is used instead.
+
+**Safety checks**
+- Integration tests cover upgrade flows.
+- Storage‑preservation tests assert balances and borrows survive upgrades.
+
+---
+
+## Interest Rate Math
+
+**Definitions (WAD = 1e18)**
+- `cash`: underlying available in the pool
+- `borrows`: total outstanding debt
+- `reserves`: protocol‑owned funds
+- `utilization`: how much of the pool is borrowed
+
+Utilization formula:
+```text
+U = borrows / (cash + borrows - reserves)
+```
+
+**Borrow rate (JumpRateModel)**
+The borrow rate is piecewise with a kink:
+```text
+if U <= kink:
+  borrowRate = baseRate + U * multiplier
+else:
+  borrowRate = baseRate + kink * multiplier + (U - kink) * jumpMultiplier
+```
+All rates are per‑second in the model; per‑year helpers are also exposed.
+
+**Supply rate**
+Depositors earn the borrow rate scaled by utilization and reduced by the reserve factor:
+```text
+supplyRate = borrowRate * U * (1 - reserveFactor)
+```
+
+**Accrual in `LendingToken`**
+On state‑changing actions, `accrueInterest()` updates global state:
+- `interestAccumulated = borrowRatePerSecond * timeElapsed * totalBorrows`
+- `totalBorrows` increases by `interestAccumulated`
+- `totalReserves` increases by `interestAccumulated * reserveFactor`
+- `borrowIndex` increases by the same simple interest factor
+
+Per‑user debt is derived from the snapshot:
+```text
+borrowBalance = principal * borrowIndex / userInterestIndex
+```
+
+**Exchange rate for receipt tokens**
+The receipt token exchange rate grows as interest accrues:
+```text
+exchangeRate = (cash + borrows - reserves) / totalSupply
+```
+Depositors redeem more underlying when the exchange rate increases.
+
+---
+
+## Oracle (Price Feeds)
+
+**What it is**
+`PriceOracle` is a lightweight aggregator that maps each asset to a Chainlink‑style feed and returns a normalized USD price with 8 decimals. It’s upgradeable (UUPS) and owner‑managed.
+
+**How prices are fetched**
+- The oracle stores `assetSources[asset] -> feed`.
+- `getAssetPrice(asset)` reads `latestRoundData()` from the feed.
+- Prices are normalized to 8 decimals regardless of the feed’s native decimals.
+
+**Safety checks**
+- `answer` must be positive (`InvalidPrice` if not).
+- `updatedAt` must be recent (`StalePrice` if older than `MAX_STALENESS`, set to 1 hour).
+- If an asset has no feed, the oracle tries a `fallbackOracle`; if none exists, it reverts.
+
+**Admin controls**
+- `setAssetSource(asset, feed)` and `setAssetSources(...)` are owner‑only.
+- Assets are tracked in `assetsList` for discoverability.
+- `setFallbackOracle(...)` sets an optional backup oracle.
+
+**Where it’s used**
+- `LendingPoolCore` and `Comptroller` use the oracle to value collateral and debt, calculate health factors, and determine liquidation eligibility.
+- Integration tests use `MockPriceFeed`, with `refresh()` calls to avoid stale‑price errors.
+
+---
+
+## Tests
+
+Tests are located in `test/`:
+- `test/unit/` contract‑level tests
+- `test/integration/` end‑to‑end protocol flows
+- `test/mocks/` mock ERC20s and price feeds
+
+Run all tests:
+```shell
+forge test
+```
+
+Run a single test file:
+```shell
+forge test --match-path test/integration/FullProtocol.t.sol
+```
+
+---
+
 ## Scripts
 
-`script/DeployProtocol.s.sol`
-- Example deployment logic for the whole suite
+Deployment:
+- `script/DeployProtocol.s.sol`
 
-`script/UpgradeProtocol.s.sol`
-- Example upgrade flow
+Upgrade flow example:
+- `script/UpgradeProtocol.s.sol`
 
 Run a script:
 ```shell
@@ -378,137 +251,65 @@ forge script script/DeployProtocol.s.sol:DeployProtocolScript --rpc-url <RPC> --
 
 ---
 
-## How to run locally (quick start)
+## Key Parameters (Glossary)
 
-1) Install Foundry:
-   https://book.getfoundry.sh/getting-started/installation
-
-2) Build:
-```shell
-forge build
-```
-
-3) Test:
-```shell
-forge test
-```
+- `LTV`: loan‑to‑value ratio (borrow limit vs collateral)
+- `Liquidation threshold`: debt level at which liquidation is allowed
+- `Health factor`: safety ratio; below 1 is liquidatable
+- `Reserve factor`: portion of interest retained by the protocol
+- `Utilization`: borrows / (cash + borrows − reserves)
 
 ---
 
-## Important parameters you will see
+## Known Limitations
 
-- `LTV` (loan-to-value): how much you can borrow vs collateral
-- `Liquidation threshold`: when liquidation becomes possible
-- `Health factor`: safety ratio; below 1 is unsafe
-- `Reserve factor`: part of interest kept as reserves
-- `Utilization`: borrowed / total available
-
----
-
----
-
-## Walkthrough example (numbers)
-
-This example matches the constants used in `test/integration/FullProtocol.t.sol`.
-Assume:
-- USDC price = $1
-- WETH price = $2,000
-- USDC reserve: LTV 75%, liquidation threshold 80%, liquidation bonus 1.05
-- WETH reserve: LTV 80%, liquidation threshold 85%, liquidation bonus 1.05
-- Close factor = 50% (max debt repaid per liquidation)
-
-### Step 1: Alice deposits USDC
-Alice deposits 10,000 USDC.
-- She receives 10,000 dUSDC (1:1 at the initial exchange rate)
-- The pool now has 10,000 USDC cash
-
-### Step 2: Bob deposits WETH as collateral
-Bob deposits 5 WETH.
-- Value = 5 * $2,000 = $10,000
-- With 80% LTV, his max borrow is $8,000
-
-### Step 3: Bob borrows USDC
-Bob borrows 5,000 USDC.
-- Pool cash drops from 10,000 to 5,000
-- Total borrows becomes 5,000
-- Bob's debt starts accruing interest
-
-### Step 4: Time passes and interest accrues
-After some time, Bob's debt grows (example):
-- Bob owes 5,086.30136982944 USDC (sample from test logs)
-- Total borrows increase, so the dUSDC exchange rate rises
-- Alice can redeem more than her original 10,000 USDC
-
-### Step 5: Price drop and liquidation risk (from liquidation test)
-Now consider the liquidation scenario used in tests:
-- Bob deposits 1 WETH (worth $2,000)
-- Bob borrows 1,500 USDC
-- WETH price drops to $1,500
-
-Re-evaluate Bob:
-- Collateral value = 1 * $1,500 = $1,500
-- Liquidation threshold (85%) => max safe debt = $1,275
-- Bob owes $1,500, so he is liquidatable
-
-### Step 6: Liquidation
-A liquidator repays part of Bob's debt.
-- Close factor is 50%, so max repay is 750 USDC
-- Liquidator receives collateral worth 750 * 1.05 = 787.5 USDC
-  (paid out as dWETH shares at current prices)
-- Bob's debt is reduced, improving his health factor
-
-### Step 7: Alice withdraws
-Alice redeems her dUSDC.
-- Because the exchange rate increased from interest, she receives more than
-  10,000 USDC.
-
-This walkthrough mirrors the same constants and behaviors tested in
-`test/integration/FullProtocol.t.sol`.
-
----
-
-## Common questions (beginner-friendly)
-
-### Why is it upgradeable?
-DeFi protocols need upgrades for bugs, new features, and parameter changes.
-Upgradeable contracts allow that without losing user funds.
-
-### What gives deposits value over time?
-Borrowers pay interest, which increases `totalBorrows`. This increases the
-exchange rate, so depositors can redeem more than they put in.
-
-### What protects users from instant upgrades?
-Governance proposals go through a timelock (minimum 24 hours).
-That gives users time to react.
-
----
-
-## Known limitations (from requirement.md)
-
-Some requirement items are not implemented yet:
-- Multiple reward token support in liquidity mining (only one rewards token)
+From `requirement.md`, not yet implemented:
+- Multiple reward tokens in liquidity mining
 - Emergency multisig override for governance
 - Explicit rollback mechanism for upgrades
 
 ---
 
-## Glossary
+## Walkthrough Example (from `test/integration/FullProtocol.t.sol`)
 
-- Collateral: assets you lock to secure a loan
-- Borrower: user who takes a loan
-- Lender: user who deposits and earns interest
-- Liquidation: forced repayment when a position is unsafe
-- Proxy: contract that forwards calls to the current implementation
-- UUPS: upgrade pattern where the implementation contains upgrade logic
-- Timelock: delay before governance actions execute
+Assumptions used in the integration suite:
+- USDC price = $1
+- WETH price = $2,000
+- USDC: LTV 75%, liquidation threshold 80%, liquidation bonus 1.05
+- WETH: LTV 80%, liquidation threshold 85%, liquidation bonus 1.05
+- Close factor = 50%
+
+### `test_FullLendingLifecycle`
+
+Goal: show a full deposit → borrow → interest accrual → repay → withdraw loop.
+
+1. Alice supplies liquidity by minting 10,000 dUSDC (`dUSDC.mint(10000e18)`), which transfers 10,000 USDC into the pool and mints 10,000 receipt tokens.
+2. Bob supplies 5 WETH as collateral, enters the WETH market, and enables borrowing.
+3. Bob borrows 5,000 USDC against his collateral. His wallet now holds `INITIAL_BALANCE + 5000e18` USDC.
+4. The test fast‑forwards 365 days, refreshes oracle feeds, and accrues interest on dUSDC. Bob’s debt increases above 5,000 USDC.
+5. Bob repays his full debt with `repayBorrow(type(uint256).max)` and his borrow balance goes to zero.
+6. Alice redeems all dUSDC. Because interest accrued, her withdrawal is greater than 10,000 USDC.
+
+### `test_LiquidityMiningRewards`
+
+Goal: show reward distribution is proportional to stake and time.
+
+1. The deployer mints 30,000 GOV to the USDC mining contract and starts a reward period via `notifyRewardAmount(30000e18)` (≈1,000 GOV/day for 30 days).
+2. Alice mints 10,000 dUSDC and stakes all of it.
+3. Bob mints 10,000 dUSDC and stakes all of it at the same time.
+4. The test fast‑forwards 15 days.
+5. Alice and Bob claim rewards. Since stake amount and timing are identical, their GOV balances are approximately equal and non‑zero.
+
+### `test_GovernanceUpgradeFlow`
+
+Goal: show a full governance‑controlled upgrade through the timelock.
+
+1. The deployer mints 1,000,000 GOV each to Alice, Bob, and Carol. Each delegates to themselves to activate voting power.
+2. A new `PriceOracle` implementation is deployed and encoded into a proposal call:
+   `UUPSUpgradeable.upgradeToAndCall(newImpl, "")`.
+3. Ownership of the current price oracle is transferred to the timelock so the upgrade can be executed.
+4. Alice proposes the upgrade. The test advances to the voting start time, then all three vote “for”.
+5. After the voting period, the proposal is queued in the timelock.
+6. After the timelock delay, the proposal is executed and `priceOracle.version()` increments by 1.
 
 ---
-
-## Want a guided walk-through?
-
-If you want, tell me which part is most confusing:
-1) lending flow
-2) upgradeable proxies
-3) governance and timelock
-4) interest rate math
-5) liquidation mechanics
