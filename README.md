@@ -53,7 +53,6 @@ Key `src/` subfolders:
 ## Contracts at a Glance
 
 Lending:
-- `src/lending/LendingPoolCore.sol` core pool entrypoint for deposits, borrows, repay, withdraw, liquidation (UUPS)
 - `src/lending/LendingToken.sol` receipt token (Compound‑style cToken) with interest accrual (UUPS)
 - `src/lending/Comptroller.sol` risk manager for cTokens (UUPS)
 - `src/lending/JumpRateModel.sol` utilization‑based interest model (immutable params)
@@ -77,34 +76,28 @@ Libraries:
 
 ---
 
-## How the Lending Flow Works
+## How the Lending Flow Works (Comptroller Flow)
 
-Deposit:
-- Call `LendingPoolCore.deposit(asset, amount, onBehalfOf)`
-- Pool validates reserve status and amount
-- Pool calls `LendingToken.mint(payer, onBehalfOf, amount)`
-- Underlying is transferred into the token contract and receipt shares are minted
+Supply:
+- Approve underlying to the dToken
+- Call `dToken.mint(amount)` to receive receipt shares
 
 Borrow:
-- Call `LendingPoolCore.borrow(asset, amount, onBehalfOf)`
-- Pool checks price oracle and health factor
-- Pool calls `LendingToken.borrow(borrower, amount)`
+- Call `comptroller.enterMarkets([dToken])` to enable collateral
+- Call `dToken.borrow(amount)`
 - Borrower receives underlying and debt accrues over time
 
 Repay:
-- Call `LendingPoolCore.repay(asset, amount, onBehalfOf)`
-- Pool calls `LendingToken.repayBorrow(payer, borrower, amount)`
+- Approve underlying to the dToken
+- Call `dToken.repayBorrow(amount)`
 - Debt is reduced immediately
 
 Withdraw:
-- Call `LendingPoolCore.withdraw(asset, amount, to)`
-- Pool checks health factor after the withdrawal
-- Pool calls `LendingToken.redeem(from, to, shares)`
+- Call `dToken.redeem(shares)` to redeem underlying
 
 Liquidation:
-- Call `LendingPoolCore.liquidate(collateralAsset, debtAsset, borrower, debtToCover)`
-- Liquidator repays part of the debt
-- Protocol seizes collateral with a bonus
+- Call `dTokenBorrowed.liquidateBorrow(borrower, repayAmount, dTokenCollateral)`
+- Comptroller validates liquidation eligibility and close factor
 
 ---
 
@@ -261,7 +254,7 @@ This ensures smooth continuation if a new reward is added before the old period 
 - `setFallbackOracle(...)` sets an optional backup oracle.
 
 **Where it’s used**
-- `LendingPoolCore` and `Comptroller` use the oracle to value collateral and debt, calculate health factors, and determine liquidation eligibility.
+- `Comptroller` uses the oracle to value collateral and debt, calculate liquidity/shortfall, and determine liquidation eligibility.
 - Integration tests use `MockPriceFeed`, with `refresh()` calls to avoid stale‑price errors.
 
 ---
