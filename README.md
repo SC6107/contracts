@@ -191,6 +191,55 @@ Depositors redeem more underlying when the exchange rate increases.
 
 ---
 
+## Liquidity Mining Math
+
+The liquidity mining module uses a Synthetix‑style reward accounting model that is O(1) per user action.
+
+**Key state (scaled by 1e18)**
+- `rewardRate`: tokens distributed per second
+- `rewardPerTokenStored`: cumulative rewards per staked token
+- `userRewardPerTokenPaid[user]`: snapshot of `rewardPerTokenStored` for each user
+- `rewards[user]`: accrued rewards not yet claimed
+- `totalSupply`: total staked dTokens
+
+**Reward per token**
+```text
+rewardPerToken =
+  rewardPerTokenStored
+  + (lastTimeRewardApplicable - lastUpdateTime) * rewardRate * 1e18 / totalSupply
+```
+If `totalSupply == 0`, the function returns the stored value unchanged.
+
+**User earnings**
+```text
+earned(user) =
+  balance[user] * (rewardPerToken - userRewardPerTokenPaid[user]) / 1e18
+  + rewards[user]
+```
+
+**Time window**
+- `lastTimeRewardApplicable = min(block.timestamp, periodFinish)`
+- This caps rewards at the end of the distribution period.
+
+**Starting or extending a reward period**
+When `notifyRewardAmount(reward)` is called:
+```text
+if now >= periodFinish:
+  rewardRate = reward / rewardsDuration
+else:
+  leftover = (periodFinish - now) * rewardRate
+  rewardRate = (reward + leftover) / rewardsDuration
+```
+This ensures smooth continuation if a new reward is added before the old period ends.
+
+**Why the accounting stays accurate**
+- Every stake/withdraw/claim runs `updateReward(user)`:
+  - Advances `rewardPerTokenStored`
+  - Updates `rewards[user]` and `userRewardPerTokenPaid[user]`
+- Rewards are proportional to stake size and the time staked.
+
+---
+
 ## Oracle (Price Feeds)
 
 **What it is**
