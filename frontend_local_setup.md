@@ -136,13 +136,9 @@ dUSDC.redeem(shares)
 
 ## Oracle Notes (Mock Feeds)
 
-Prices are mocked and can become **stale** after 1 hour. If you warp time in tests, refresh feeds:
+Prices are mocked with fixed values. Use `MockPriceFeed.setPrice(newPrice)` to change prices for testing scenarios like liquidation.
 
-```solidity
-MockPriceFeed.refresh()
-```
-
-Use `PriceOracle.getAssetSource(asset)` to find each feed.
+Use `PriceOracle.getAssetSource(asset)` to find each feed address.
 
 ---
 
