@@ -255,7 +255,6 @@ This ensures smooth continuation if a new reward is added before the old period 
 
 **Safety checks**
 - `answer` must be positive (`InvalidPrice` if not).
-- `updatedAt` must be recent (`StalePrice` if older than `MAX_STALENESS`, set to 1 hour).
 - If an asset has no feed, the oracle tries a `fallbackOracle`; if none exists, it reverts.
 
 **Admin controls**
@@ -263,9 +262,9 @@ This ensures smooth continuation if a new reward is added before the old period 
 - Assets are tracked in `assetsList` for discoverability.
 - `setFallbackOracle(...)` sets an optional backup oracle.
 
-**Where it’s used**
+**Where it's used**
 - `Comptroller` uses the oracle to value collateral and debt, calculate liquidity/shortfall, and determine liquidation eligibility.
-- Integration tests use `MockPriceFeed`, with `refresh()` calls to avoid stale‑price errors.
+- Integration tests use `MockPriceFeed` for fixed prices.
 
 ---
 

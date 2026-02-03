@@ -162,5 +162,4 @@ This script resolves addresses automatically and runs the lifecycle against your
 
 - **`PriceFeedNotFound`**: make sure the oracle is configured with `setAssetSource` (done in `FullSetupLocal`).
 - **`MarketNotListed`**: ensure `Comptroller.supportMarket` was called (done in `FullSetupLocal`).
-- **`StalePrice`**: call `refresh()` on the mock feeds.
 - **Insufficient balance**: confirm your account is funded with USDC/WETH and ETH for gas.

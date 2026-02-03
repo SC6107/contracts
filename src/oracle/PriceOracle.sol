@@ -29,9 +29,6 @@ interface AggregatorV3Interface {
 contract PriceOracle is Initializable, UUPSUpgradeable, OwnableUpgradeable, IPriceOracle {
     using PriceOracleStorage for PriceOracleStorage.Layout;
 
-    /// @notice Maximum staleness for price data (1 hour)
-    uint256 public constant MAX_STALENESS = 1 hours;
-
     /// @notice Base currency unit (8 decimals for USD)
     uint256 public constant BASE_CURRENCY_UNIT = 1e8;
 
@@ -169,10 +166,9 @@ contract PriceOracle is Initializable, UUPSUpgradeable, OwnableUpgradeable, IPri
     function _getPriceFromChainlink(address source) internal view returns (uint256) {
         AggregatorV3Interface feed = AggregatorV3Interface(source);
 
-        (, int256 answer,, uint256 updatedAt,) = feed.latestRoundData();
+        (, int256 answer,,,) = feed.latestRoundData();
 
         if (answer <= 0) revert Errors.InvalidPrice();
-        if (block.timestamp - updatedAt > MAX_STALENESS) revert Errors.StalePrice();
 
         // Normalize to 8 decimals
         uint8 feedDecimals = feed.decimals();
