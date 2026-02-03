@@ -16,8 +16,6 @@ library DataTypes {
         address interestRateModel;
         /// @notice Collateral factor (max LTV) in WAD (1e18 = 100%)
         uint256 collateralFactor;
-        /// @notice Liquidation threshold in WAD (1e18 = 100%)
-        uint256 liquidationThreshold;
         /// @notice Liquidation bonus in WAD (1.05e18 = 5% bonus)
         uint256 liquidationBonus;
         /// @notice Whether the reserve is active
