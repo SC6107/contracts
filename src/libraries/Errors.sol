@@ -24,6 +24,12 @@ library Errors {
     error RepayMoreThanDebt();
     error WithdrawMoreThanBalance();
 
+    // Comptroller errors
+    error MarketNotListed();
+    error MarketAlreadyListed();
+    error NotInMarket();
+    error ExitMarketNotAllowed();
+
     // Health factor errors
     error HealthFactorOk();
     error HealthFactorBelowThreshold();

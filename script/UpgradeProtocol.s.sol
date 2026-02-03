@@ -6,7 +6,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 
 import {PriceOracle} from "../src/oracle/PriceOracle.sol";
 import {LendingToken} from "../src/lending/LendingToken.sol";
-import {LendingPoolCore} from "../src/lending/LendingPoolCore.sol";
+import {Comptroller} from "../src/lending/Comptroller.sol";
 import {GovernanceToken} from "../src/governance/GovernanceToken.sol";
 import {LiquidityMining} from "../src/mining/LiquidityMining.sol";
 import {ProtocolTimelock} from "../src/governance/ProtocolTimelock.sol";
@@ -42,21 +42,21 @@ contract UpgradeProtocol is Script {
     }
 
     /**
-     * @notice Upgrades the LendingPoolCore contract
+     * @notice Upgrades the Comptroller contract
      * @param proxyAddress The proxy address
      */
-    function upgradeLendingPoolCore(address proxyAddress) external {
+    function upgradeComptroller(address proxyAddress) external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        address newImpl = address(new LendingPoolCore());
-        console2.log("New LendingPoolCore implementation:", newImpl);
+        address newImpl = address(new Comptroller());
+        console2.log("New Comptroller implementation:", newImpl);
 
         UUPSUpgradeable(proxyAddress).upgradeToAndCall(newImpl, "");
-        console2.log("LendingPoolCore upgraded successfully");
+        console2.log("Comptroller upgraded successfully");
 
-        uint256 newVersion = LendingPoolCore(proxyAddress).version();
+        uint256 newVersion = Comptroller(proxyAddress).version();
         console2.log("New version:", newVersion);
 
         vm.stopBroadcast();

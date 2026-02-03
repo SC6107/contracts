@@ -9,6 +9,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {ILendingToken} from "../interfaces/ILendingToken.sol";
+import {IComptroller} from "../interfaces/IComptroller.sol";
 import {IInterestRateModel} from "../interfaces/IInterestRateModel.sol";
 import {LendingTokenStorage} from "./LendingTokenStorage.sol";
 import {WadRayMath} from "../libraries/WadRayMath.sol";
@@ -16,7 +17,7 @@ import {Errors} from "../libraries/Errors.sol";
 
 /**
  * @title LendingToken
- * @notice UUPS upgradeable receipt token for lending pool deposits (like Compound's cToken)
+ * @notice UUPS upgradeable receipt token for lending pool deposits (Compound-style cToken)
  * @dev Uses ERC-7201 namespaced storage
  */
 contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, OwnableUpgradeable, ILendingToken {
@@ -50,6 +51,15 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
         uint256 totalBorrows
     );
 
+    /// @notice Emitted when a liquidation occurs
+    event LiquidateBorrow(
+        address indexed liquidator,
+        address indexed borrower,
+        uint256 repayAmount,
+        address indexed cTokenCollateral,
+        uint256 seizeTokens
+    );
+
     /// @notice Emitted when reserves are updated
     event ReservesUpdated(uint256 newReserves);
 
@@ -59,10 +69,9 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
     /// @notice Emitted when interest rate model is updated
     event NewInterestRateModel(address oldModel, address newModel);
 
-    /// @notice Modifier to restrict calls to lending pool only
-    modifier onlyLendingPool() {
-        if (msg.sender != LendingTokenStorage.layout().lendingPool) {
-            revert Errors.OnlyLendingPool();
+    modifier onlyComptroller() {
+        if (msg.sender != LendingTokenStorage.layout().comptroller) {
+            revert Errors.Unauthorized();
         }
         _;
     }
@@ -75,7 +84,7 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
     /**
      * @notice Initializes the lending token
      * @param underlying_ The underlying asset address
-     * @param lendingPool_ The lending pool address
+     * @param comptroller_ The comptroller address
      * @param interestRateModel_ The interest rate model address
      * @param initialExchangeRateMantissa_ Initial exchange rate (scaled by 1e18)
      * @param name_ Token name
@@ -84,7 +93,7 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
      */
     function initialize(
         address underlying_,
-        address lendingPool_,
+        address comptroller_,
         address interestRateModel_,
         uint256 initialExchangeRateMantissa_,
         string memory name_,
@@ -92,7 +101,7 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
         address owner_
     ) external initializer {
         if (underlying_ == address(0)) revert Errors.ZeroAddress();
-        if (lendingPool_ == address(0)) revert Errors.ZeroAddress();
+        if (comptroller_ == address(0)) revert Errors.ZeroAddress();
         if (interestRateModel_ == address(0)) revert Errors.ZeroAddress();
         if (owner_ == address(0)) revert Errors.ZeroAddress();
         if (initialExchangeRateMantissa_ == 0) revert Errors.ZeroAmount();
@@ -103,7 +112,7 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
         LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
         $.version = 1;
         $.underlying = underlying_;
-        $.lendingPool = lendingPool_;
+        $.comptroller = comptroller_;
         $.interestRateModel = interestRateModel_;
         $.initialExchangeRateMantissa = initialExchangeRateMantissa_;
         $.accrualBlockTimestamp = block.timestamp;
@@ -121,8 +130,8 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
     /**
      * @inheritdoc ILendingToken
      */
-    function lendingPool() external view returns (address) {
-        return LendingTokenStorage.layout().lendingPool;
+    function comptroller() external view returns (address) {
+        return LendingTokenStorage.layout().comptroller;
     }
 
     /**
@@ -228,8 +237,6 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
         uint256 timeElapsed = currentTimestamp - accrualTimestampPrior;
 
         // Calculate interest accumulated
-        // simpleInterestFactor = borrowRate * timeElapsed
-        // interestAccumulated = simpleInterestFactor * totalBorrows
         uint256 simpleInterestFactor = borrowRatePerSecond * timeElapsed;
         uint256 interestAccumulated = simpleInterestFactor.wadMul(borrowsPrior);
 
@@ -245,32 +252,68 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
     /**
      * @inheritdoc ILendingToken
      */
-    function mint(address from, address to, uint256 mintAmount) external onlyLendingPool returns (uint256) {
-        accrueInterest();
+    function mint(uint256 mintAmount) external returns (uint256) {
+        _requireNotPaused();
 
         LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
+        accrueInterest();
+        IComptroller($.comptroller).mintAllowed(address(this), msg.sender, mintAmount);
 
         // Calculate exchange rate BEFORE transfer to prevent donation attacks
         uint256 exchangeRateMantissa = exchangeRateStored();
         uint256 mintTokens = mintAmount.wadDiv(exchangeRateMantissa);
 
         // Transfer underlying from sender
-        IERC20($.underlying).safeTransferFrom(from, address(this), mintAmount);
+        IERC20($.underlying).safeTransferFrom(msg.sender, address(this), mintAmount);
 
-        // Mint dTokens to recipient
-        _mint(to, mintTokens);
+        // Mint cTokens to recipient
+        _mint(msg.sender, mintTokens);
 
-        emit Mint(to, mintAmount, mintTokens);
+        emit Mint(msg.sender, mintAmount, mintTokens);
         return mintTokens;
     }
 
     /**
      * @inheritdoc ILendingToken
      */
-    function redeem(address from, address to, uint256 redeemTokens) external onlyLendingPool returns (uint256) {
-        accrueInterest();
+    function mint(address payer, address onBehalfOf, uint256 mintAmount)
+        external
+        onlyComptroller
+        returns (uint256)
+    {
+        _requireNotPaused();
+        if (payer == address(0) || onBehalfOf == address(0)) revert Errors.ZeroAddress();
 
         LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
+        accrueInterest();
+        IComptroller($.comptroller).mintAllowed(address(this), onBehalfOf, mintAmount);
+
+        // Calculate exchange rate BEFORE transfer to prevent donation attacks
+        uint256 exchangeRateMantissa = exchangeRateStored();
+        uint256 mintTokens = mintAmount.wadDiv(exchangeRateMantissa);
+
+        // Transfer underlying from payer
+        IERC20($.underlying).safeTransferFrom(payer, address(this), mintAmount);
+
+        // Mint cTokens to recipient
+        _mint(onBehalfOf, mintTokens);
+
+        emit Mint(payer, mintAmount, mintTokens);
+        return mintTokens;
+    }
+
+    /**
+     * @inheritdoc ILendingToken
+     */
+    function redeem(uint256 redeemTokens) external returns (uint256) {
+        _requireNotPaused();
+
+        accrueInterest();
+        IComptroller(LendingTokenStorage.layout().comptroller).redeemAllowed(
+            address(this),
+            msg.sender,
+            redeemTokens
+        );
 
         // Calculate underlying amount
         uint256 exchangeRateMantissa = exchangeRateStored();
@@ -279,11 +322,46 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
         // Check liquidity
         if (redeemAmount > getCash()) revert Errors.InsufficientLiquidity();
 
-        // Burn dTokens from sender
+        // Burn cTokens from sender
+        _burn(msg.sender, redeemTokens);
+
+        // Transfer underlying to recipient
+        IERC20(LendingTokenStorage.layout().underlying).safeTransfer(msg.sender, redeemAmount);
+
+        emit Redeem(msg.sender, redeemAmount, redeemTokens);
+        return redeemAmount;
+    }
+
+    /**
+     * @inheritdoc ILendingToken
+     */
+    function redeem(address from, address to, uint256 redeemTokens)
+        external
+        onlyComptroller
+        returns (uint256)
+    {
+        _requireNotPaused();
+        if (from == address(0) || to == address(0)) revert Errors.ZeroAddress();
+
+        accrueInterest();
+        IComptroller(LendingTokenStorage.layout().comptroller).redeemAllowed(
+            address(this),
+            from,
+            redeemTokens
+        );
+
+        // Calculate underlying amount
+        uint256 exchangeRateMantissa = exchangeRateStored();
+        uint256 redeemAmount = redeemTokens.wadMul(exchangeRateMantissa);
+
+        // Check liquidity
+        if (redeemAmount > getCash()) revert Errors.InsufficientLiquidity();
+
+        // Burn cTokens from sender
         _burn(from, redeemTokens);
 
         // Transfer underlying to recipient
-        IERC20($.underlying).safeTransfer(to, redeemAmount);
+        IERC20(LendingTokenStorage.layout().underlying).safeTransfer(to, redeemAmount);
 
         emit Redeem(from, redeemAmount, redeemTokens);
         return redeemAmount;
@@ -292,35 +370,73 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
     /**
      * @inheritdoc ILendingToken
      */
-    function redeemUnderlying(address from, address to, uint256 redeemAmount) external onlyLendingPool returns (uint256) {
+    function redeemUnderlying(uint256 redeemAmount) external returns (uint256) {
+        _requireNotPaused();
+
         accrueInterest();
-
-        LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
-
-        // Check liquidity
-        if (redeemAmount > getCash()) revert Errors.InsufficientLiquidity();
 
         // Calculate tokens to burn
         uint256 exchangeRateMantissa = exchangeRateStored();
         uint256 redeemTokens = redeemAmount.wadDiv(exchangeRateMantissa);
 
-        // Burn dTokens from sender
-        _burn(from, redeemTokens);
+        IComptroller(LendingTokenStorage.layout().comptroller).redeemAllowed(
+            address(this),
+            msg.sender,
+            redeemTokens
+        );
+
+        // Check liquidity
+        if (redeemAmount > getCash()) revert Errors.InsufficientLiquidity();
+
+        // Burn cTokens from sender
+        _burn(msg.sender, redeemTokens);
 
         // Transfer underlying to recipient
-        IERC20($.underlying).safeTransfer(to, redeemAmount);
+        IERC20(LendingTokenStorage.layout().underlying).safeTransfer(msg.sender, redeemAmount);
 
-        emit Redeem(from, redeemAmount, redeemTokens);
+        emit Redeem(msg.sender, redeemAmount, redeemTokens);
         return redeemTokens;
     }
 
     /**
      * @inheritdoc ILendingToken
      */
-    function borrow(address borrower, uint256 borrowAmount) external onlyLendingPool {
-        accrueInterest();
+    function borrow(uint256 borrowAmount) external {
+        _requireNotPaused();
 
         LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
+        accrueInterest();
+        IComptroller($.comptroller).borrowAllowed(address(this), msg.sender, borrowAmount);
+
+        // Check liquidity
+        if (borrowAmount > getCash()) revert Errors.InsufficientLiquidity();
+
+        // Get current borrow balance
+        uint256 accountBorrowsPrev = _borrowBalanceStoredInternal(msg.sender);
+        uint256 accountBorrowsNew = accountBorrowsPrev + borrowAmount;
+        uint256 totalBorrowsNew = $.totalBorrows + borrowAmount;
+
+        // Update account borrows
+        $.accountBorrows[msg.sender].principal = accountBorrowsNew;
+        $.accountBorrows[msg.sender].interestIndex = $.borrowIndex;
+        $.totalBorrows = totalBorrowsNew;
+
+        // Transfer underlying to borrower
+        IERC20($.underlying).safeTransfer(msg.sender, borrowAmount);
+
+        emit Borrow(msg.sender, borrowAmount, accountBorrowsNew, totalBorrowsNew);
+    }
+
+    /**
+     * @inheritdoc ILendingToken
+     */
+    function borrow(address borrower, uint256 borrowAmount) external onlyComptroller {
+        _requireNotPaused();
+        if (borrower == address(0)) revert Errors.ZeroAddress();
+
+        LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
+        accrueInterest();
+        IComptroller($.comptroller).borrowAllowed(address(this), borrower, borrowAmount);
 
         // Check liquidity
         if (borrowAmount > getCash()) revert Errors.InsufficientLiquidity();
@@ -344,35 +460,90 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
     /**
      * @inheritdoc ILendingToken
      */
-    function repayBorrow(address payer, address borrower, uint256 repayAmount) external onlyLendingPool returns (uint256) {
+    function repayBorrow(uint256 repayAmount) external returns (uint256) {
+        _requireNotPaused();
+
+        IComptroller(LendingTokenStorage.layout().comptroller).repayBorrowAllowed(
+            address(this),
+            msg.sender,
+            msg.sender,
+            repayAmount
+        );
+
         accrueInterest();
+        return _repayBorrowFresh(msg.sender, msg.sender, repayAmount);
+    }
+
+    /**
+     * @inheritdoc ILendingToken
+     */
+    function repayBorrow(address payer, address borrower, uint256 repayAmount)
+        external
+        onlyComptroller
+        returns (uint256)
+    {
+        _requireNotPaused();
+        if (payer == address(0) || borrower == address(0)) revert Errors.ZeroAddress();
+
+        IComptroller(LendingTokenStorage.layout().comptroller).repayBorrowAllowed(
+            address(this),
+            payer,
+            borrower,
+            repayAmount
+        );
+
+        accrueInterest();
+        return _repayBorrowFresh(payer, borrower, repayAmount);
+    }
+
+    /**
+     * @inheritdoc ILendingToken
+     */
+    function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256) {
+        _requireNotPaused();
+
+        IComptroller(LendingTokenStorage.layout().comptroller).repayBorrowAllowed(
+            address(this),
+            msg.sender,
+            borrower,
+            repayAmount
+        );
+
+        accrueInterest();
+        return _repayBorrowFresh(msg.sender, borrower, repayAmount);
+    }
+
+    /**
+     * @inheritdoc ILendingToken
+     */
+    function liquidateBorrow(address borrower, uint256 repayAmount, address cTokenCollateral)
+        external
+        returns (uint256 seizeTokens)
+    {
+        _requireNotPaused();
+
+        if (borrower == msg.sender) revert Errors.SelfLiquidation();
 
         LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
+        IComptroller comptroller_ = IComptroller($.comptroller);
 
-        // Get current borrow balance
-        uint256 accountBorrowsPrev = _borrowBalanceStoredInternal(borrower);
+        accrueInterest();
+        ILendingToken(cTokenCollateral).accrueInterest();
 
-        // Calculate actual repay amount
-        uint256 actualRepayAmount;
-        if (repayAmount == type(uint256).max) {
-            actualRepayAmount = accountBorrowsPrev;
-        } else {
-            actualRepayAmount = repayAmount > accountBorrowsPrev ? accountBorrowsPrev : repayAmount;
-        }
+        comptroller_.liquidateBorrowAllowed(
+            address(this),
+            cTokenCollateral,
+            msg.sender,
+            borrower,
+            repayAmount
+        );
 
-        // Transfer underlying from payer
-        IERC20($.underlying).safeTransferFrom(payer, address(this), actualRepayAmount);
+        uint256 actualRepayAmount = _repayBorrowFresh(msg.sender, borrower, repayAmount);
+        seizeTokens = comptroller_.liquidateCalculateSeizeTokens(address(this), cTokenCollateral, actualRepayAmount);
 
-        // Update account borrows
-        uint256 accountBorrowsNew = accountBorrowsPrev - actualRepayAmount;
-        uint256 totalBorrowsNew = $.totalBorrows - actualRepayAmount;
+        ILendingToken(cTokenCollateral).seize(msg.sender, borrower, seizeTokens);
 
-        $.accountBorrows[borrower].principal = accountBorrowsNew;
-        $.accountBorrows[borrower].interestIndex = $.borrowIndex;
-        $.totalBorrows = totalBorrowsNew;
-
-        emit RepayBorrow(payer, borrower, actualRepayAmount, accountBorrowsNew, totalBorrowsNew);
-        return actualRepayAmount;
+        emit LiquidateBorrow(msg.sender, borrower, actualRepayAmount, cTokenCollateral, seizeTokens);
     }
 
     /**
@@ -401,8 +572,18 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
     /**
      * @inheritdoc ILendingToken
      */
-    function seize(address liquidator, address borrower, uint256 seizeTokens) external onlyLendingPool {
-        // Transfer dTokens from borrower to liquidator
+    function seize(address liquidator, address borrower, uint256 seizeTokens) external {
+        _requireNotPaused();
+
+        IComptroller(LendingTokenStorage.layout().comptroller).seizeAllowed(
+            address(this),
+            msg.sender,
+            liquidator,
+            borrower,
+            seizeTokens
+        );
+
+        // Transfer cTokens from borrower to liquidator
         _transfer(borrower, liquidator, seizeTokens);
     }
 
@@ -438,7 +619,6 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
 
     /**
      * @notice Returns the contract version
-     * @return The version number
      */
     function version() external view returns (uint256) {
         return LendingTokenStorage.layout().version;
@@ -446,8 +626,6 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
 
     /**
      * @notice Internal function to get stored borrow balance
-     * @param account The account to query
-     * @return The borrow balance with accrued interest
      */
     function _borrowBalanceStoredInternal(address account) internal view returns (uint256) {
         LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
@@ -461,9 +639,43 @@ contract LendingToken is Initializable, UUPSUpgradeable, ERC20Upgradeable, Ownab
         return borrowSnapshot.principal.wadMul($.borrowIndex).wadDiv(borrowSnapshot.interestIndex);
     }
 
+    function _repayBorrowFresh(address payer, address borrower, uint256 repayAmount) internal returns (uint256) {
+        LendingTokenStorage.Layout storage $ = LendingTokenStorage.layout();
+
+        // Get current borrow balance
+        uint256 accountBorrowsPrev = _borrowBalanceStoredInternal(borrower);
+
+        // Calculate actual repay amount
+        uint256 actualRepayAmount;
+        if (repayAmount == type(uint256).max) {
+            actualRepayAmount = accountBorrowsPrev;
+        } else {
+            actualRepayAmount = repayAmount > accountBorrowsPrev ? accountBorrowsPrev : repayAmount;
+        }
+
+        // Transfer underlying from payer
+        IERC20($.underlying).safeTransferFrom(payer, address(this), actualRepayAmount);
+
+        // Update account borrows
+        uint256 accountBorrowsNew = accountBorrowsPrev - actualRepayAmount;
+        uint256 totalBorrowsNew = $.totalBorrows - actualRepayAmount;
+
+        $.accountBorrows[borrower].principal = accountBorrowsNew;
+        $.accountBorrows[borrower].interestIndex = $.borrowIndex;
+        $.totalBorrows = totalBorrowsNew;
+
+        emit RepayBorrow(payer, borrower, actualRepayAmount, accountBorrowsNew, totalBorrowsNew);
+        return actualRepayAmount;
+    }
+
+    function _requireNotPaused() internal view {
+        if (IComptroller(LendingTokenStorage.layout().comptroller).paused()) {
+            revert Errors.Paused();
+        }
+    }
+
     /**
      * @notice Authorizes an upgrade
-     * @param newImplementation The new implementation address
      */
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
         if (newImplementation == address(0)) revert Errors.InvalidImplementation();

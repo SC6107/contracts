@@ -12,8 +12,8 @@ library LendingTokenStorage {
         uint256 version;
         /// @notice Address of the underlying asset
         address underlying;
-        /// @notice Address of the lending pool
-        address lendingPool;
+        /// @notice Address of the comptroller
+        address comptroller;
         /// @notice Address of the interest rate model
         address interestRateModel;
         /// @notice Initial exchange rate (scaled by 1e18)

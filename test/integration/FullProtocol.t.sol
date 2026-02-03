@@ -8,7 +8,7 @@ import {IGovernor} from "@openzeppelin/contracts/governance/IGovernor.sol";
 import {TimelockControllerUpgradeable} from "@openzeppelin/contracts-upgradeable/governance/TimelockControllerUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
-import {LendingPoolCore} from "../../src/lending/LendingPoolCore.sol";
+import {Comptroller} from "../../src/lending/Comptroller.sol";
 import {LendingToken} from "../../src/lending/LendingToken.sol";
 import {JumpRateModel} from "../../src/lending/JumpRateModel.sol";
 import {PriceOracle} from "../../src/oracle/PriceOracle.sol";
@@ -28,7 +28,7 @@ contract FullProtocolTest is Test {
     using WadRayMath for uint256;
 
     // Core contracts
-    LendingPoolCore public lendingPool;
+    Comptroller public comptroller;
     PriceOracle public priceOracle;
     JumpRateModel public interestRateModel;
     GovernanceToken public govToken;
@@ -88,11 +88,11 @@ contract FullProtocolTest is Test {
         // Deploy interest rate model
         interestRateModel = new JumpRateModel(0.02e18, 0.1e18, 1e18, 0.8e18);
 
-        // Deploy lending pool
-        lendingPool = LendingPoolCore(
+        // Deploy comptroller
+        comptroller = Comptroller(
             _deployProxy(
-                address(new LendingPoolCore()),
-                abi.encodeCall(LendingPoolCore.initialize, (deployer, address(priceOracle)))
+                address(new Comptroller()),
+                abi.encodeCall(Comptroller.initialize, (deployer, address(priceOracle)))
             )
         );
 
@@ -102,7 +102,7 @@ contract FullProtocolTest is Test {
                 address(new LendingToken()),
                 abi.encodeCall(
                     LendingToken.initialize,
-                    (address(usdc), address(lendingPool), address(interestRateModel), 1e18, "dUSDC", "dUSDC", deployer)
+                    (address(usdc), address(comptroller), address(interestRateModel), 1e18, "dUSDC", "dUSDC", deployer)
                 )
             )
         );
@@ -111,14 +111,14 @@ contract FullProtocolTest is Test {
                 address(new LendingToken()),
                 abi.encodeCall(
                     LendingToken.initialize,
-                    (address(weth), address(lendingPool), address(interestRateModel), 1e18, "dWETH", "dWETH", deployer)
+                    (address(weth), address(comptroller), address(interestRateModel), 1e18, "dWETH", "dWETH", deployer)
                 )
             )
         );
 
-        // Initialize reserves
-        lendingPool.initReserve(address(usdc), address(dUSDC), address(interestRateModel), 0.75e18, 0.8e18, 1.05e18);
-        lendingPool.initReserve(address(weth), address(dWETH), address(interestRateModel), 0.8e18, 0.85e18, 1.05e18);
+        // List markets
+        comptroller.supportMarket(address(dUSDC), 0.75e18);
+        comptroller.supportMarket(address(dWETH), 0.8e18);
 
         // Deploy governance token
         govToken = GovernanceToken(
@@ -207,8 +207,6 @@ contract FullProtocolTest is Test {
         vm.startPrank(user);
         usdc.approve(address(dUSDC), type(uint256).max);
         weth.approve(address(dWETH), type(uint256).max);
-        usdc.approve(address(lendingPool), type(uint256).max);
-        weth.approve(address(lendingPool), type(uint256).max);
         dUSDC.approve(address(usdcMining), type(uint256).max);
         dWETH.approve(address(wethMining), type(uint256).max);
         vm.stopPrank();
@@ -217,18 +215,22 @@ contract FullProtocolTest is Test {
     // ============ LENDING LIFECYCLE TESTS ============
 
     function test_FullLendingLifecycle() public {
-        // 1. Alice deposits USDC
+        // 1. Alice supplies USDC
         vm.prank(alice);
-        lendingPool.deposit(address(usdc), 10000e18, alice);
+        dUSDC.mint(10000e18);
         assertEq(dUSDC.balanceOf(alice), 10000e18);
 
-        // 2. Bob deposits WETH as collateral
-        vm.prank(bob);
-        lendingPool.deposit(address(weth), 5e18, bob); // 5 WETH = $10,000
+        // 2. Bob supplies WETH as collateral and enters market
+        vm.startPrank(bob);
+        dWETH.mint(5e18); // 5 WETH = $10,000
+        address[] memory markets = new address[](1);
+        markets[0] = address(dWETH);
+        comptroller.enterMarkets(markets);
+        vm.stopPrank();
 
         // 3. Bob borrows USDC
         vm.prank(bob);
-        lendingPool.borrow(address(usdc), 5000e18, bob); // $5000 against $10,000 * 0.8 = $8,000 max
+        dUSDC.borrow(5000e18); // $5000 against $10,000 * 0.8 = $8,000 max
         assertEq(usdc.balanceOf(bob), INITIAL_BALANCE + 5000e18);
 
         // 4. Time passes, interest accrues
@@ -243,13 +245,14 @@ contract FullProtocolTest is Test {
 
         // 5. Bob repays debt
         vm.prank(bob);
-        lendingPool.repay(address(usdc), type(uint256).max, bob);
+        dUSDC.repayBorrow(type(uint256).max);
         assertEq(dUSDC.borrowBalanceStored(bob), 0);
 
         // 6. Alice withdraws with interest
         uint256 aliceBalanceBefore = usdc.balanceOf(alice);
+        uint256 aliceTokens = dUSDC.balanceOf(alice);
         vm.prank(alice);
-        lendingPool.withdraw(address(usdc), type(uint256).max, alice);
+        dUSDC.redeem(aliceTokens);
 
         uint256 aliceWithdrawn = usdc.balanceOf(alice) - aliceBalanceBefore;
         assertGt(aliceWithdrawn, 10000e18); // Got more than deposited due to interest
@@ -258,27 +261,29 @@ contract FullProtocolTest is Test {
     function test_LiquidationWithPriceDrop() public {
         // 1. Setup: Alice provides liquidity
         vm.prank(alice);
-        lendingPool.deposit(address(usdc), 50000e18, alice);
+        dUSDC.mint(50000e18);
 
         // 2. Bob deposits WETH and borrows max
-        vm.prank(bob);
-        lendingPool.deposit(address(weth), 1e18, bob); // 1 WETH = $2000
-
-        vm.prank(bob);
-        lendingPool.borrow(address(usdc), 1500e18, bob); // Close to max
+        vm.startPrank(bob);
+        dWETH.mint(1e18); // 1 WETH = $2000
+        address[] memory markets = new address[](1);
+        markets[0] = address(dWETH);
+        comptroller.enterMarkets(markets);
+        dUSDC.borrow(1500e18); // Close to max
+        vm.stopPrank();
 
         // 3. Price drops
         wethFeed.setPrice(1500e8); // WETH drops to $1500
 
-        // 4. Check health factor
-        (, , , , , uint256 healthFactor) = lendingPool.getUserAccountData(bob);
-        assertLt(healthFactor, 1e18);
+        // 4. Check shortfall
+        (, uint256 shortfall) = comptroller.getAccountLiquidity(bob);
+        assertGt(shortfall, 0);
 
         // 5. Liquidator repays debt and gets collateral
         uint256 liquidatorWethBefore = dWETH.balanceOf(liquidator);
 
         vm.prank(liquidator);
-        lendingPool.liquidate(address(weth), address(usdc), bob, 750e18);
+        dUSDC.liquidateBorrow(bob, 750e18, address(dWETH));
 
         // Liquidator should have received dWETH
         assertGt(dWETH.balanceOf(liquidator), liquidatorWethBefore);
@@ -295,15 +300,15 @@ contract FullProtocolTest is Test {
         vm.prank(deployer);
         usdcMining.notifyRewardAmount(30000e18); // 1000 tokens/day
 
-        // 3. Alice deposits and stakes
+        // 3. Alice supplies and stakes
         vm.startPrank(alice);
-        lendingPool.deposit(address(usdc), 10000e18, alice);
+        dUSDC.mint(10000e18);
         usdcMining.stake(dUSDC.balanceOf(alice));
         vm.stopPrank();
 
         // 4. Bob also stakes
         vm.startPrank(bob);
-        lendingPool.deposit(address(usdc), 10000e18, bob);
+        dUSDC.mint(10000e18);
         usdcMining.stake(dUSDC.balanceOf(bob));
         vm.stopPrank();
 
@@ -331,7 +336,7 @@ contract FullProtocolTest is Test {
 
         // Alice stakes immediately
         vm.startPrank(alice);
-        lendingPool.deposit(address(usdc), 10000e18, alice);
+        dUSDC.mint(10000e18);
         usdcMining.stake(dUSDC.balanceOf(alice));
         vm.stopPrank();
 
@@ -340,7 +345,7 @@ contract FullProtocolTest is Test {
 
         // Bob stakes later
         vm.startPrank(bob);
-        lendingPool.deposit(address(usdc), 10000e18, bob);
+        dUSDC.mint(10000e18);
         usdcMining.stake(dUSDC.balanceOf(bob));
         vm.stopPrank();
 
@@ -437,34 +442,35 @@ contract FullProtocolTest is Test {
     function test_StoragePreservationAcrossUpgrade() public {
         // 1. Setup state
         vm.prank(alice);
-        lendingPool.deposit(address(usdc), 10000e18, alice);
+        dUSDC.mint(10000e18);
 
         uint256 aliceBalanceBefore = dUSDC.balanceOf(alice);
-        uint256 versionBefore = lendingPool.version();
+        uint256 versionBefore = comptroller.version();
 
         // 2. Deploy new implementation
-        address newImpl = address(new LendingPoolCore());
+        address newImpl = address(new Comptroller());
 
         // 3. Upgrade
         vm.prank(deployer);
-        UUPSUpgradeable(address(lendingPool)).upgradeToAndCall(newImpl, "");
+        UUPSUpgradeable(address(comptroller)).upgradeToAndCall(newImpl, "");
 
         // 4. Verify storage preserved
         assertEq(dUSDC.balanceOf(alice), aliceBalanceBefore);
-        assertEq(lendingPool.version(), versionBefore + 1);
-        assertEq(lendingPool.getLendingToken(address(usdc)), address(dUSDC));
+        assertEq(comptroller.version(), versionBefore + 1);
     }
 
     function test_LendingTokenStoragePreservation() public {
         // 1. Setup state with borrows
         vm.prank(alice);
-        lendingPool.deposit(address(usdc), 10000e18, alice);
+        dUSDC.mint(10000e18);
 
-        vm.prank(bob);
-        lendingPool.deposit(address(weth), 5e18, bob);
-
-        vm.prank(bob);
-        lendingPool.borrow(address(usdc), 5000e18, bob);
+        vm.startPrank(bob);
+        dWETH.mint(5e18);
+        address[] memory markets = new address[](1);
+        markets[0] = address(dWETH);
+        comptroller.enterMarkets(markets);
+        dUSDC.borrow(5000e18);
+        vm.stopPrank();
 
         // Time passes for interest
         vm.warp(block.timestamp + 30 days);
@@ -490,64 +496,66 @@ contract FullProtocolTest is Test {
     function test_MultipleAssetCollateral() public {
         // Alice provides liquidity
         vm.prank(alice);
-        lendingPool.deposit(address(usdc), 50000e18, alice);
+        dUSDC.mint(50000e18);
 
         // Bob deposits multiple assets as collateral
         vm.startPrank(bob);
-        lendingPool.deposit(address(usdc), 5000e18, bob); // $5000
-        lendingPool.deposit(address(weth), 2e18, bob); // $4000
+        dUSDC.mint(5000e18); // $5000
+        dWETH.mint(2e18); // $4000
+        address[] memory markets = new address[](2);
+        markets[0] = address(dUSDC);
+        markets[1] = address(dWETH);
+        comptroller.enterMarkets(markets);
 
-        // Total collateral: $9000, with weighted LTV
+        // Total collateral: $9000, with collateral factors
         // USDC: $5000 * 0.75 = $3750
         // WETH: $4000 * 0.8 = $3200
         // Total borrowing power: $6950
 
-        lendingPool.borrow(address(usdc), 6000e18, bob); // Should succeed
+        dUSDC.borrow(6000e18); // Should succeed
         vm.stopPrank();
 
-        (uint256 totalCollateral, uint256 totalDebt, , , , uint256 healthFactor) =
-            lendingPool.getUserAccountData(bob);
-
-        assertGt(totalCollateral, 0);
-        assertEq(totalDebt, 6000e8); // $6000 in 8 decimals = 6000 * 1e8
-        assertGt(healthFactor, 1e18);
+        (, uint256 shortfall) = comptroller.getAccountLiquidity(bob);
+        assertEq(shortfall, 0);
     }
 
     function test_ProtocolPauseAndResume() public {
         // Setup
         vm.prank(alice);
-        lendingPool.deposit(address(usdc), 10000e18, alice);
+        dUSDC.mint(10000e18);
 
         // Pause
         vm.prank(deployer);
-        lendingPool.setPaused(true);
+        comptroller.setPaused(true);
 
         // Operations should fail
         vm.prank(bob);
         vm.expectRevert();
-        lendingPool.deposit(address(usdc), 1000e18, bob);
+        dUSDC.mint(1000e18);
 
         // Resume
         vm.prank(deployer);
-        lendingPool.setPaused(false);
+        comptroller.setPaused(false);
 
         // Operations should work again
         vm.prank(bob);
-        lendingPool.deposit(address(usdc), 1000e18, bob);
+        dUSDC.mint(1000e18);
         assertEq(dUSDC.balanceOf(bob), 1000e18);
     }
 
     function test_InterestAccrualOverTime() public {
-        // Alice deposits
+        // Alice supplies
         vm.prank(alice);
-        lendingPool.deposit(address(usdc), 10000e18, alice);
+        dUSDC.mint(10000e18);
 
         // Bob borrows
-        vm.prank(bob);
-        lendingPool.deposit(address(weth), 10e18, bob);
-
-        vm.prank(bob);
-        lendingPool.borrow(address(usdc), 5000e18, bob);
+        vm.startPrank(bob);
+        dWETH.mint(10e18);
+        address[] memory markets = new address[](1);
+        markets[0] = address(dWETH);
+        comptroller.enterMarkets(markets);
+        dUSDC.borrow(5000e18);
+        vm.stopPrank();
 
         uint256 prevDebt = dUSDC.borrowBalanceStored(bob);
         uint256 prevRate = dUSDC.exchangeRateStored();

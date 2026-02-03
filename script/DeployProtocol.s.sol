@@ -7,7 +7,7 @@ import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.s
 import {JumpRateModel} from "../src/lending/JumpRateModel.sol";
 import {PriceOracle} from "../src/oracle/PriceOracle.sol";
 import {LendingToken} from "../src/lending/LendingToken.sol";
-import {LendingPoolCore} from "../src/lending/LendingPoolCore.sol";
+import {Comptroller} from "../src/lending/Comptroller.sol";
 import {GovernanceToken} from "../src/governance/GovernanceToken.sol";
 import {LiquidityMining} from "../src/mining/LiquidityMining.sol";
 import {ProtocolTimelock} from "../src/governance/ProtocolTimelock.sol";
@@ -23,7 +23,7 @@ contract DeployProtocol is Script {
     // Deployment addresses
     address public jumpRateModel;
     address public priceOracle;
-    address public lendingPoolCore;
+    address public comptroller;
     address public governanceToken;
     address public liquidityMining;
     address public protocolTimelock;
@@ -69,15 +69,15 @@ contract DeployProtocol is Script {
         );
         console2.log("PriceOracle deployed at:", priceOracle);
 
-        // 3. Deploy LendingPoolCore (upgradeable)
-        address lendingPoolImpl = address(new LendingPoolCore());
-        lendingPoolCore = address(
+        // 3. Deploy Comptroller (upgradeable)
+        address comptrollerImpl = address(new Comptroller());
+        comptroller = address(
             new ERC1967Proxy(
-                lendingPoolImpl,
-                abi.encodeCall(LendingPoolCore.initialize, (deployer, priceOracle))
+                comptrollerImpl,
+                abi.encodeCall(Comptroller.initialize, (deployer, priceOracle))
             )
         );
-        console2.log("LendingPoolCore deployed at:", lendingPoolCore);
+        console2.log("Comptroller deployed at:", comptroller);
 
         // 4. Deploy GovernanceToken (upgradeable)
         address govTokenImpl = address(new GovernanceToken());
@@ -140,7 +140,7 @@ contract DeployProtocol is Script {
         console2.log("\n=== Deployment Summary ===");
         console2.log("JumpRateModel:", jumpRateModel);
         console2.log("PriceOracle:", priceOracle);
-        console2.log("LendingPoolCore:", lendingPoolCore);
+        console2.log("Comptroller:", comptroller);
         console2.log("GovernanceToken:", governanceToken);
         console2.log("ProtocolTimelock:", protocolTimelock);
         console2.log("ProtocolGovernor:", protocolGovernor);
@@ -169,7 +169,7 @@ contract DeployProtocol is Script {
                 lendingTokenImpl,
                 abi.encodeCall(
                     LendingToken.initialize,
-                    (underlying, lendingPoolCore, jumpRateModel, INITIAL_EXCHANGE_RATE, name, symbol, deployer)
+                    (underlying, comptroller, jumpRateModel, INITIAL_EXCHANGE_RATE, name, symbol, deployer)
                 )
             )
         );

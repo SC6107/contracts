@@ -460,6 +460,137 @@ contract LendingPoolCore is
         return LendingPoolStorage.layout().reservesList;
     }
 
+    // =========================
+    // Comptroller Compatibility
+    // =========================
+
+    /**
+     * @notice Checks if mint is allowed for a lending token
+     */
+    function mintAllowed(address cToken, address, uint256) external view {
+        LendingPoolStorage.Layout storage $ = LendingPoolStorage.layout();
+        if ($.paused) revert Errors.Paused();
+
+        address asset = _getAssetFromLendingToken(cToken);
+        if (!$.reserves[asset].isActive) revert Errors.ReserveNotActive();
+    }
+
+    /**
+     * @notice Checks if redeem is allowed for a lending token
+     */
+    function redeemAllowed(address cToken, address redeemer, uint256 redeemTokens) external view {
+        LendingPoolStorage.Layout storage $ = LendingPoolStorage.layout();
+        if ($.paused) revert Errors.Paused();
+
+        address asset = _getAssetFromLendingToken(cToken);
+        if (!$.reserves[asset].isActive) revert Errors.ReserveNotActive();
+
+        if (redeemTokens == 0) return;
+
+        uint256 redeemAmount = redeemTokens.wadMul(ILendingToken(cToken).exchangeRateStored());
+        _validateHealthFactorAfterWithdraw(redeemer, asset, redeemAmount);
+    }
+
+    /**
+     * @notice Checks if borrow is allowed for a lending token
+     */
+    function borrowAllowed(address cToken, address borrower, uint256 borrowAmount) external view {
+        LendingPoolStorage.Layout storage $ = LendingPoolStorage.layout();
+        if ($.paused) revert Errors.Paused();
+
+        address asset = _getAssetFromLendingToken(cToken);
+        if (!$.reserves[asset].isActive) revert Errors.ReserveNotActive();
+
+        _validateBorrow(borrower, asset, borrowAmount);
+    }
+
+    /**
+     * @notice Checks if repay is allowed for a lending token
+     */
+    function repayBorrowAllowed(address cToken, address, address, uint256) external view {
+        LendingPoolStorage.Layout storage $ = LendingPoolStorage.layout();
+        if ($.paused) revert Errors.Paused();
+
+        address asset = _getAssetFromLendingToken(cToken);
+        if (!$.reserves[asset].isActive) revert Errors.ReserveNotActive();
+    }
+
+    /**
+     * @notice Checks if liquidation is allowed
+     */
+    function liquidateBorrowAllowed(
+        address cTokenBorrowed,
+        address cTokenCollateral,
+        address,
+        address borrower,
+        uint256 repayAmount
+    ) external view {
+        LendingPoolStorage.Layout storage $ = LendingPoolStorage.layout();
+        if ($.paused) revert Errors.Paused();
+
+        address debtAsset = _getAssetFromLendingToken(cTokenBorrowed);
+        address collateralAsset = _getAssetFromLendingToken(cTokenCollateral);
+
+        if (!$.reserves[debtAsset].isActive || !$.reserves[collateralAsset].isActive) {
+            revert Errors.ReserveNotActive();
+        }
+        if (!$.userUsingAsCollateral[borrower][collateralAsset]) {
+            revert Errors.CollateralCannotBeLiquidated();
+        }
+
+        (, , , , , uint256 healthFactor) = getUserAccountData(borrower);
+        if (healthFactor >= WadRayMath.WAD) revert Errors.NotLiquidatable();
+
+        uint256 userDebt = ILendingToken(cTokenBorrowed).borrowBalanceStored(borrower);
+        uint256 maxLiquidatable = userDebt.wadMul($.closeFactor);
+        if (repayAmount > maxLiquidatable) revert Errors.LiquidationAmountTooHigh();
+    }
+
+    /**
+     * @notice Checks if seize is allowed
+     */
+    function seizeAllowed(address cTokenCollateral, address cTokenBorrowed, address, address, uint256)
+        external
+        view
+    {
+        LendingPoolStorage.Layout storage $ = LendingPoolStorage.layout();
+        if ($.paused) revert Errors.Paused();
+
+        address collateralAsset = _getAssetFromLendingToken(cTokenCollateral);
+        if (!$.reserves[collateralAsset].isActive) revert Errors.ReserveNotActive();
+
+        // When called by the lending pool during liquidation, cTokenBorrowed will be this contract.
+        if (cTokenBorrowed == address(this)) return;
+
+        address debtAsset = _getAssetFromLendingToken(cTokenBorrowed);
+        if (!$.reserves[debtAsset].isActive) revert Errors.ReserveNotActive();
+    }
+
+    /**
+     * @notice Calculates seize tokens for liquidation
+     */
+    function liquidateCalculateSeizeTokens(
+        address cTokenBorrowed,
+        address cTokenCollateral,
+        uint256 repayAmount
+    ) external view returns (uint256 seizeTokens) {
+        address debtAsset = _getAssetFromLendingToken(cTokenBorrowed);
+        address collateralAsset = _getAssetFromLendingToken(cTokenCollateral);
+
+        LendingPoolStorage.Layout storage $ = LendingPoolStorage.layout();
+        DataTypes.ReserveData storage collateralReserve = $.reserves[collateralAsset];
+
+        uint256 collateralToSeize = _calculateCollateralToSeize(
+            collateralAsset,
+            debtAsset,
+            repayAmount,
+            collateralReserve.liquidationBonus
+        );
+
+        uint256 exchangeRate = ILendingToken(cTokenCollateral).exchangeRateStored();
+        seizeTokens = collateralToSeize.wadDiv(exchangeRate);
+    }
+
     /**
      * @notice Returns the contract version
      * @return The version number
@@ -577,5 +708,19 @@ contract LendingPoolCore is
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {
         if (newImplementation == address(0)) revert Errors.InvalidImplementation();
         LendingPoolStorage.layout().version++;
+    }
+
+    function _getAssetFromLendingToken(address lendingToken) internal view returns (address asset) {
+        LendingPoolStorage.Layout storage $ = LendingPoolStorage.layout();
+        uint256 reservesLength = $.reservesList.length;
+
+        for (uint256 i = 0; i < reservesLength; i++) {
+            address reserveAsset = $.reservesList[i];
+            if ($.reserves[reserveAsset].lendingToken == lendingToken) {
+                return reserveAsset;
+            }
+        }
+
+        revert Errors.ReserveNotFound();
     }
 }
