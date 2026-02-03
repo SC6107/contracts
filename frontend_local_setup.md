@@ -10,7 +10,7 @@ anvil
 script/deploy_local.sh
 ```
 
-`deploy_local.sh` runs `FullSetupLocal` (Comptroller flow), which deploys mocks and markets.
+`deploy_local.sh` runs `FullSetupLocal` (Comptroller flow), which deploys mocks, markets, governance, and mining.
 
 ---
 
@@ -23,11 +23,16 @@ script/deploy_local.sh
 - `Comptroller` (proxy)
 - `JumpRateModel`
 - `LendingToken` markets: **dUSDC** and **dWETH**
+- `GovernanceToken` (proxy)
+- `ProtocolTimelock` (proxy)
+- `ProtocolGovernor` (proxy)
+- `LiquidityMining` for **dUSDC** and **dWETH** (proxies)
 
 It also:
 - Registers feeds in the oracle
 - Lists dUSDC/dWETH in the comptroller
 - Mints test balances to common Anvil accounts
+- Grants governor proposer/canceller roles on the timelock
 
 You interact **directly with `LendingToken` markets** (Comptroller flow).
 
@@ -43,8 +48,10 @@ script/quick_extract_local.sh
 
 It prints:
 - `COMPTROLLER`, `PRICE_ORACLE`
+- `GOVERNANCE_TOKEN`, `PROTOCOL_TIMELOCK`, `PROTOCOL_GOVERNOR`
 - `USDC`, `WETH`, `DUSDC`, `DWETH`
 - `USDC_FEED`, `WETH_FEED`
+- `USDC_MINING`, `WETH_MINING`
 - `RPC_URL`
 
 If needed, you can override the broadcast file:
