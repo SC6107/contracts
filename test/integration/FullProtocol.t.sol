@@ -235,9 +235,6 @@ contract FullProtocolTest is Test {
 
         // 4. Time passes, interest accrues
         vm.warp(block.timestamp + 365 days);
-        // Refresh price feeds to avoid stale price error
-        usdcFeed.refresh();
-        wethFeed.refresh();
         dUSDC.accrueInterest();
 
         uint256 bobDebt = dUSDC.borrowBalanceStored(bob);
@@ -565,9 +562,6 @@ contract FullProtocolTest is Test {
         for (uint256 i = 0; i < 4; i++) {
             currentTime += 90 days;
             vm.warp(currentTime);
-            // Refresh price feeds to avoid stale price error
-            usdcFeed.refresh();
-            wethFeed.refresh();
             dUSDC.accrueInterest();
 
             uint256 currentDebt = dUSDC.borrowBalanceStored(bob);
