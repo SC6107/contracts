@@ -40,7 +40,7 @@ Top level:
 - `foundry.toml` Foundry config
 
 Key `src/` subfolders:
-- `src/lending/` lending pool, cToken logic, interest rate model
+- `src/lending/` lending markets (cToken logic, comptroller, interest rate model)
 - `src/mining/` liquidity mining
 - `src/governance/` governance and timelock
 - `src/oracle/` price oracle
