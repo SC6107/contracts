@@ -38,7 +38,6 @@ Top level:
 - `script/` deploy and upgrade scripts
 - `lib/` external dependencies (OpenZeppelin, forge-std)
 - `foundry.toml` Foundry config
-- `requirement.md` project requirements and gaps
 
 Key `src/` subfolders:
 - `src/lending/` lending pool, cToken logic, interest rate model
@@ -69,10 +68,21 @@ Governance:
 
 Oracle:
 - `src/oracle/PriceOracle.sol` price feed aggregation (UUPS)
+- `src/oracle/PriceOracleStorage.sol` ERC‑7201 storage layout
 
 Libraries:
 - `src/libraries/WadRayMath.sol` fixed‑point math (1e18 and 1e27)
+- `src/libraries/PercentageMath.sol` percentage calculations (basis points)
 - `src/libraries/Errors.sol` shared custom errors
+- `src/libraries/DataTypes.sol` shared data structures (ReserveData, etc.)
+- `src/libraries/ReentrancyGuardStorage.sol` reentrancy guard with ERC‑7201 storage
+
+Interfaces:
+- `src/interfaces/IComptroller.sol` Comptroller interface
+- `src/interfaces/ILendingToken.sol` LendingToken (cToken) interface
+- `src/interfaces/IInterestRateModel.sol` interest rate model interface
+- `src/interfaces/ILiquidityMining.sol` liquidity mining interface
+- `src/interfaces/IPriceOracle.sol` price oracle interface
 
 ---
 
@@ -280,13 +290,38 @@ forge test --match-path test/integration/FullProtocol.t.sol
 
 ## Scripts
 
-Deployment:
-- `script/DeployProtocol.s.sol`
-- `script/deploy_local.sh` (starts Anvil, deploys locally)
+### Deployment
 
-Upgrade flow example:
-- `script/UpgradeProtocol.s.sol`
-- `script/test_upgrade_local.sh` (local upgrade test helper)
+| Script | Description |
+|--------|-------------|
+| `script/DeployProtocol.s.sol` | Production deployment script for all protocol contracts |
+| `script/deploy_local.sh` | Shell script to deploy locally (assumes Anvil is running) |
+| `script/FullSetupLocal.s.sol` | Full local setup: mocks + oracle + comptroller + lending tokens + governance + mining. Mints test tokens to Anvil accounts |
+
+### Upgrades
+
+| Script | Description |
+|--------|-------------|
+| `script/UpgradeProtocol.s.sol` | Upgrade script for UUPS proxies |
+| `script/test_upgrade_local.sh` | Local upgrade test helper |
+| `script/upgrade_network.sh` | Direct UUPS upgrade on live network (owner key required) |
+
+### Reproduction / Demo Scripts
+
+| Script | Description |
+|--------|-------------|
+| `script/repro_full_lending_lifecycle.s.sol` | Reproduces the full lending lifecycle: supply → borrow → accrue → repay → withdraw |
+| `script/repro_full_lending_lifecycle.sh` | Shell wrapper that extracts addresses and runs the lending lifecycle script |
+| `script/repro_liquidity_mining_rewards.s.sol` | Reproduces liquidity mining rewards: stake → time passes → claim |
+| `script/repro_liquidity_mining_rewards.sh` | Shell wrapper that extracts addresses and runs the mining rewards script |
+
+### Utilities
+
+| Script | Description |
+|--------|-------------|
+| `script/quick_extract_local.sh` | Extracts deployed contract addresses from `broadcast/FullSetupLocal.s.sol/*/run-latest.json`. Outputs environment variables for all proxies, underlying tokens, and feeds |
+
+### Usage Examples
 
 Run a script:
 ```shell
@@ -343,15 +378,6 @@ PRICE_ORACLE_PROXY=<proxy> script/test_upgrade_local.sh
 - `Health factor`: safety ratio; below 1 is liquidatable
 - `Reserve factor`: portion of interest retained by the protocol
 - `Utilization`: borrows / (cash + borrows − reserves)
-
----
-
-## Known Limitations
-
-From `requirement.md`, not yet implemented:
-- Multiple reward tokens in liquidity mining
-- Emergency multisig override for governance
-- Explicit rollback mechanism for upgrades
 
 ---
 
