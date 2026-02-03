@@ -322,8 +322,14 @@ Notes:
 
 Local deploy (Anvil):
 ```shell
+# Terminal 1
+anvil
+
+# Terminal 2
 script/deploy_local.sh
 ```
+Notes:
+- `script/deploy_local.sh` assumes Anvil is already running.
 
 Local upgrade test (assumes deployed):
 ```shell

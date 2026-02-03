@@ -10,6 +10,10 @@ PRIVATE_KEY=${PRIVATE_KEY:-0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae7
 
 ANVIL_PID=""
 KEEP_ANVIL_RUNNING=${KEEP_ANVIL_RUNNING:-1}
+START_ANVIL=${START_ANVIL:-0}
+ANVIL_FOREGROUND=${ANVIL_FOREGROUND:-0}
+DEPLOY_PROTOCOL=${DEPLOY_PROTOCOL:-0}
+FULL_SETUP=${FULL_SETUP:-1}
 
 cleanup() {
   if [[ "${KEEP_ANVIL_RUNNING}" == "1" ]]; then
@@ -21,25 +25,25 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Try to start anvil. If the port is already in use, assume anvil is running.
-# Run it in the background so we can deploy, then wait on it to keep it in the foreground.
-anvil --port "${ANVIL_PORT}" &
-ANVIL_PID=$!
-
-# Give anvil a moment to start; if it exits immediately, keep going.
-sleep 0.5
-if ! kill -0 "${ANVIL_PID}" >/dev/null 2>&1; then
-  ANVIL_PID=""
-  echo "Anvil did not start (port ${ANVIL_PORT} may already be in use). Continuing..."
-else
-  echo "Anvil started (pid ${ANVIL_PID}) on ${RPC_URL}"
+if [[ "${START_ANVIL}" == "1" ]]; then
+  echo "This script no longer starts Anvil."
+  echo "Please start Anvil manually, then run: script/deploy_local.sh"
+  exit 1
 fi
 
 export PRIVATE_KEY
 
-forge script script/DeployProtocol.s.sol:DeployProtocol \
-  --rpc-url "${RPC_URL}" \
-  --broadcast
+if [[ "${DEPLOY_PROTOCOL}" == "1" ]]; then
+  forge script script/DeployProtocol.s.sol:DeployProtocol \
+    --rpc-url "${RPC_URL}" \
+    --broadcast
+fi
+
+if [[ "${FULL_SETUP}" == "1" ]]; then
+  forge script script/FullSetupLocal.s.sol:FullSetupLocal \
+    --rpc-url "${RPC_URL}" \
+    --broadcast
+fi
 
 if [[ -n "${ANVIL_PID}" && "${KEEP_ANVIL_RUNNING}" == "1" ]]; then
   echo "Anvil is running in this terminal. Press Ctrl+C to stop it."
