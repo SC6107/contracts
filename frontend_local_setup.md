@@ -403,6 +403,135 @@ await usdcMining.connect(alice).exit();
 
 ---
 
+## Interest Rate Info (APY Calculation)
+
+The protocol uses a **JumpRateModel** (Compound-style) for interest rates.
+
+### Protocol Constants (from FullSetupLocal)
+
+| Parameter | Value | Description |
+|-----------|-------|-------------|
+| Base Rate | 2% per year | Minimum borrow rate |
+| Multiplier | 10% per year | Rate increase per utilization (before kink) |
+| Jump Multiplier | 100% per year | Rate increase per utilization (after kink) |
+| Kink | 80% | Utilization threshold for jump rate |
+| Reserve Factor | 10% | Protocol's cut of interest |
+
+### Interest Rate Formula
+
+```
+Utilization = TotalBorrows / (Cash + TotalBorrows - Reserves)
+
+If Utilization ≤ 80% (kink):
+  BorrowRate = BaseRate + Utilization × Multiplier
+
+If Utilization > 80%:
+  BorrowRate = BaseRate + Kink × Multiplier + (Utilization - Kink) × JumpMultiplier
+
+SupplyRate = BorrowRate × Utilization × (1 - ReserveFactor)
+```
+
+### JumpRateModel ABI
+
+```solidity
+// View: get utilization rate (scaled by 1e18, e.g., 0.5e18 = 50%)
+function utilizationRate(uint256 cash, uint256 borrows, uint256 reserves) external pure returns (uint256)
+
+// View: get borrow rate per second (scaled by 1e18)
+function getBorrowRate(uint256 cash, uint256 borrows, uint256 reserves) external view returns (uint256)
+
+// View: get supply rate per second (scaled by 1e18)
+function getSupplyRate(uint256 cash, uint256 borrows, uint256 reserves, uint256 reserveFactorMantissa) external view returns (uint256)
+
+// View: get borrow rate per year (scaled by 1e18, e.g., 0.05e18 = 5% APR)
+function getBorrowRatePerYear(uint256 cash, uint256 borrows, uint256 reserves) external view returns (uint256)
+
+// View: get supply rate per year (scaled by 1e18)
+function getSupplyRatePerYear(uint256 cash, uint256 borrows, uint256 reserves, uint256 reserveFactorMantissa) external view returns (uint256)
+
+// Constants
+function kink() external view returns (uint256)
+function baseRatePerSecond() external view returns (uint256)
+function multiplierPerSecond() external view returns (uint256)
+function jumpMultiplierPerSecond() external view returns (uint256)
+```
+
+### LendingToken Helper Functions
+
+```solidity
+// Get interest rate model address
+function interestRateModel() external view returns (address)
+
+// Get reserve factor (scaled by 1e18, e.g., 0.1e18 = 10%)
+function reserveFactorMantissa() external view returns (uint256)
+
+// Get values needed for rate calculation
+function getCash() external view returns (uint256)
+function totalBorrows() external view returns (uint256)
+function totalReserves() external view returns (uint256)
+```
+
+### APY Calculation Example (ethers.js)
+
+```javascript
+const SECONDS_PER_YEAR = 365n * 24n * 60n * 60n; // 31536000
+const WAD = ethers.parseEther("1"); // 1e18
+
+// Get market state from LendingToken
+const cash = await dUSDC.getCash();
+const borrows = await dUSDC.totalBorrows();
+const reserves = await dUSDC.totalReserves();
+const reserveFactor = await dUSDC.reserveFactorMantissa();
+
+// Get interest rate model
+const rateModelAddr = await dUSDC.interestRateModel();
+const rateModel = new ethers.Contract(rateModelAddr, JumpRateModelABI, provider);
+
+// Get APR (Annual Percentage Rate)
+const borrowRatePerYear = await rateModel.getBorrowRatePerYear(cash, borrows, reserves);
+const supplyRatePerYear = await rateModel.getSupplyRatePerYear(cash, borrows, reserves, reserveFactor);
+
+// Convert to percentage (e.g., 0.05e18 -> 5.00%)
+const borrowAPR = Number(borrowRatePerYear) / 1e18 * 100;
+const supplyAPR = Number(supplyRatePerYear) / 1e18 * 100;
+
+console.log(`Borrow APR: ${borrowAPR.toFixed(2)}%`);
+console.log(`Supply APR: ${supplyAPR.toFixed(2)}%`);
+
+// Get utilization
+const utilization = await rateModel.utilizationRate(cash, borrows, reserves);
+const utilizationPercent = Number(utilization) / 1e18 * 100;
+console.log(`Utilization: ${utilizationPercent.toFixed(2)}%`);
+
+// Convert APR to APY (compounded per second)
+// APY = (1 + ratePerSecond)^secondsPerYear - 1
+function aprToApy(aprWad) {
+  const ratePerSecond = Number(aprWad) / Number(SECONDS_PER_YEAR) / 1e18;
+  const apy = Math.pow(1 + ratePerSecond, Number(SECONDS_PER_YEAR)) - 1;
+  return apy * 100; // percentage
+}
+
+const borrowAPY = aprToApy(borrowRatePerYear);
+const supplyAPY = aprToApy(supplyRatePerYear);
+
+console.log(`Borrow APY: ${borrowAPY.toFixed(2)}%`);
+console.log(`Supply APY: ${supplyAPY.toFixed(2)}%`);
+```
+
+### Example Rate Curve
+
+| Utilization | Borrow APR | Supply APR* |
+|-------------|------------|-------------|
+| 0% | 2.00% | 0.00% |
+| 40% | 6.00% | 2.16% |
+| 80% (kink) | 10.00% | 7.20% |
+| 90% | 20.00% | 16.20% |
+| 100% | 30.00% | 27.00% |
+
+*Supply APR assumes 10% reserve factor
+
+---
+
 ## Troubleshooting
 
 - **`PriceFeedNotFound`**: make sure the oracle is configured with `setAssetSource` (done in `FullSetupLocal`).
