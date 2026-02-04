@@ -70,6 +70,23 @@ RUN_JSON=path/to/run-latest.json script/quick_extract_local.sh
 
 ---
 
+## Deployer Account
+
+The deployer is determined by the `PRIVATE_KEY` environment variable. When running locally with `deploy_local.sh`, this is typically **Anvil Account 0**:
+
+| | Value |
+|---|---|
+| **Address** | `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` |
+| **Private Key** | `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80` |
+
+The deployer has special privileges:
+- **Owner** of all proxy contracts (Comptroller, PriceOracle, LendingTokens, GovernanceToken, Timelock, Governor, LiquidityMining)
+- **Minter** of GovernanceToken (can call `govToken.mint(to, amount)`)
+- **RewardsDistributor** for LiquidityMining contracts (can call `notifyRewardAmount`)
+- **Admin** of ProtocolTimelock
+
+---
+
 ## Test Accounts (Recommended)
 
 `deploy_local.sh` runs `FullSetupLocal`, which **mints mock USDC/WETH** to these Anvil accounts by default:
