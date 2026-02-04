@@ -154,6 +154,238 @@ This script resolves addresses automatically and runs the lifecycle against your
 
 ---
 
+## ABI Reference (Full Lending Lifecycle)
+
+Based on `test_FullLendingLifecycle`, here are the function signatures for frontend integration:
+
+### ERC20 (USDC, WETH)
+
+```solidity
+// Approve dToken to spend underlying
+function approve(address spender, uint256 amount) external returns (bool)
+
+// Check token balance
+function balanceOf(address account) external view returns (uint256)
+```
+
+### LendingToken (dUSDC, dWETH)
+
+```solidity
+// Supply: deposit underlying tokens and receive dTokens
+function mint(uint256 mintAmount) external returns (uint256 mintTokens)
+
+// Withdraw: burn dTokens and receive underlying
+function redeem(uint256 redeemTokens) external returns (uint256 redeemAmount)
+
+// Withdraw by underlying amount
+function redeemUnderlying(uint256 redeemAmount) external returns (uint256 redeemTokens)
+
+// Borrow underlying against collateral
+function borrow(uint256 borrowAmount) external
+
+// Repay borrowed amount (use type(uint256).max for full repay)
+function repayBorrow(uint256 repayAmount) external returns (uint256 actualRepayAmount)
+
+// Repay on behalf of another borrower
+function repayBorrowBehalf(address borrower, uint256 repayAmount) external returns (uint256)
+
+// Liquidate undercollateralized position
+function liquidateBorrow(address borrower, uint256 repayAmount, address cTokenCollateral) external returns (uint256 seizeTokens)
+
+// Update interest (called automatically by other functions)
+function accrueInterest() external
+
+// View: get current borrow balance (stale)
+function borrowBalanceStored(address account) external view returns (uint256)
+
+// View: get current borrow balance (updates interest first)
+function borrowBalanceCurrent(address account) external returns (uint256)
+
+// View: get exchange rate (dToken to underlying)
+function exchangeRateStored() external view returns (uint256)
+
+// View: check dToken balance
+function balanceOf(address account) external view returns (uint256)
+
+// View: get underlying token address
+function underlying() external view returns (address)
+
+// View: get total borrows
+function totalBorrows() external view returns (uint256)
+
+// View: get cash (available liquidity)
+function getCash() external view returns (uint256)
+```
+
+### Comptroller
+
+```solidity
+// Enter markets to use assets as collateral (required before borrowing)
+function enterMarkets(address[] calldata cTokens) external
+
+// Exit a market (remove asset as collateral)
+function exitMarket(address cToken) external
+
+// View: get account liquidity and shortfall
+function getAccountLiquidity(address account) external view returns (uint256 liquidity, uint256 shortfall)
+
+// View: get hypothetical liquidity after a transaction
+function getHypotheticalAccountLiquidity(
+    address account,
+    address cTokenModify,
+    uint256 redeemTokens,
+    uint256 borrowAmount
+) external view returns (uint256 liquidity, uint256 shortfall)
+
+// View: check if market is listed
+function isMarketListed(address cToken) external view returns (bool)
+
+// View: get all markets
+function getAllMarkets() external view returns (address[] memory)
+
+// View: get market config (collateral factor, isListed)
+function getMarketConfiguration(address cToken) external view returns (uint256 collateralFactor, bool isListed)
+
+// View: check if protocol is paused
+function paused() external view returns (bool)
+
+// View: get close factor (max % of borrow liquidatable)
+function closeFactorMantissa() external view returns (uint256)
+
+// View: get liquidation incentive
+function liquidationIncentiveMantissa() external view returns (uint256)
+```
+
+### Full Lending Lifecycle Example (ethers.js)
+
+```javascript
+// 1. Alice supplies USDC
+await usdc.connect(alice).approve(dUSDC.address, ethers.MaxUint256);
+await dUSDC.connect(alice).mint(ethers.parseEther("10000"));
+
+// 2. Bob supplies WETH as collateral
+await weth.connect(bob).approve(dWETH.address, ethers.MaxUint256);
+await dWETH.connect(bob).mint(ethers.parseEther("5"));
+
+// 3. Bob enters WETH market (required for using as collateral)
+await comptroller.connect(bob).enterMarkets([dWETH.address]);
+
+// 4. Bob borrows USDC
+await dUSDC.connect(bob).borrow(ethers.parseEther("5000"));
+
+// 5. Check Bob's debt (after some time)
+const debt = await dUSDC.borrowBalanceStored(bob.address);
+
+// 6. Bob repays full debt
+await usdc.connect(bob).approve(dUSDC.address, ethers.MaxUint256);
+await dUSDC.connect(bob).repayBorrow(ethers.MaxUint256);
+
+// 7. Alice withdraws with interest
+const aliceShares = await dUSDC.balanceOf(alice.address);
+await dUSDC.connect(alice).redeem(aliceShares);
+```
+
+---
+
+## ABI Reference (Liquidity Mining Rewards)
+
+Based on `test_LiquidityMiningRewards`, here are the function signatures for liquidity mining:
+
+### LiquidityMining (USDC_MINING, WETH_MINING)
+
+```solidity
+// Stake dTokens to earn rewards
+function stake(uint256 amount) external
+
+// Withdraw staked dTokens
+function withdraw(uint256 amount) external
+
+// Claim accumulated rewards
+function getReward() external
+
+// Withdraw all and claim rewards in one transaction
+function exit() external
+
+// View: get pending rewards for account
+function earned(address account) external view returns (uint256)
+
+// View: get staked balance for account
+function balanceOf(address account) external view returns (uint256)
+
+// View: get total staked in contract
+function totalSupply() external view returns (uint256)
+
+// View: get current reward rate (tokens per second)
+function rewardRate() external view returns (uint256)
+
+// View: get reward per token (for calculation)
+function rewardPerToken() external view returns (uint256)
+
+// View: get timestamp when current reward period ends
+function periodFinish() external view returns (uint256)
+
+// View: get rewards duration (in seconds)
+function rewardsDuration() external view returns (uint256)
+
+// View: get staking token address (dToken)
+function stakingToken() external view returns (address)
+
+// View: get rewards token address (governance token)
+function rewardsToken() external view returns (address)
+
+// View: get last time reward was applicable
+function lastTimeRewardApplicable() external view returns (uint256)
+
+// Admin: notify contract of new rewards (requires tokens already transferred)
+function notifyRewardAmount(uint256 reward) external
+
+// Admin: set rewards duration (only when period finished)
+function setRewardsDuration(uint256 duration) external
+```
+
+### Liquidity Mining Rewards Example (ethers.js)
+
+```javascript
+// Setup: Admin funds mining contract and notifies rewards
+await govToken.connect(deployer).mint(usdcMining.address, ethers.parseEther("30000"));
+await usdcMining.connect(deployer).notifyRewardAmount(ethers.parseEther("30000"));
+
+// 1. Alice supplies USDC and gets dUSDC
+await usdc.connect(alice).approve(dUSDC.address, ethers.MaxUint256);
+await dUSDC.connect(alice).mint(ethers.parseEther("10000"));
+
+// 2. Alice approves and stakes dUSDC in mining contract
+await dUSDC.connect(alice).approve(usdcMining.address, ethers.MaxUint256);
+const aliceDTokens = await dUSDC.balanceOf(alice.address);
+await usdcMining.connect(alice).stake(aliceDTokens);
+
+// 3. Bob also supplies and stakes
+await usdc.connect(bob).approve(dUSDC.address, ethers.MaxUint256);
+await dUSDC.connect(bob).mint(ethers.parseEther("10000"));
+await dUSDC.connect(bob).approve(usdcMining.address, ethers.MaxUint256);
+const bobDTokens = await dUSDC.balanceOf(bob.address);
+await usdcMining.connect(bob).stake(bobDTokens);
+
+// 4. Time passes... (in test: vm.warp; in real: wait)
+
+// 5. Check pending rewards
+const alicePending = await usdcMining.earned(alice.address);
+const bobPending = await usdcMining.earned(bob.address);
+
+// 6. Claim rewards
+await usdcMining.connect(alice).getReward();
+await usdcMining.connect(bob).getReward();
+
+// 7. Check received governance tokens
+const aliceGovBalance = await govToken.balanceOf(alice.address);
+const bobGovBalance = await govToken.balanceOf(bob.address);
+
+// 8. (Optional) Withdraw staked tokens and claim in one tx
+await usdcMining.connect(alice).exit();
+```
+
+---
+
 ## Troubleshooting
 
 - **`PriceFeedNotFound`**: make sure the oracle is configured with `setAssetSource` (done in `FullSetupLocal`).
