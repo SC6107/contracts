@@ -57,6 +57,10 @@ contract FullSetupLocal is Script {
     uint256 internal constant INITIAL_STAKE_AMOUNT = 10_000e18;
     uint256 internal constant INITIAL_MINING_REWARD = 100e18;
 
+    // Local lending seed values (ensure account overview has non-zero APRs)
+    uint256 internal constant INITIAL_LENDING_SUPPLY = 10_000e18;
+    uint256 internal constant INITIAL_LENDING_BORROW = 2_000e18;
+
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
@@ -219,6 +223,9 @@ contract FullSetupLocal is Script {
         _seedLiquidityMining(usdc, dUSDC, usdcMining, governanceToken);
         _seedLiquidityMining(weth, dWETH, wethMining, governanceToken);
 
+        // 14) Seed lending position for deployer (non-zero account overview)
+        _seedLendingPosition(usdc, dUSDC, comptroller);
+
         vm.stopBroadcast();
 
         // Summary
@@ -273,6 +280,24 @@ contract FullSetupLocal is Script {
         // Stake dTokens into mining
         dToken.approve(address(mining), INITIAL_STAKE_AMOUNT);
         mining.stake(INITIAL_STAKE_AMOUNT);
+    }
+
+    function _seedLendingPosition(
+        MockERC20 underlying,
+        LendingToken dToken,
+        Comptroller comptroller
+    ) internal {
+        // Enable supplied asset as collateral
+        address[] memory markets = new address[](1);
+        markets[0] = address(dToken);
+        comptroller.enterMarkets(markets);
+
+        // Supply underlying to receive dTokens (kept in wallet)
+        underlying.approve(address(dToken), INITIAL_LENDING_SUPPLY);
+        dToken.mint(INITIAL_LENDING_SUPPLY);
+
+        // Borrow against supplied collateral to create utilization
+        dToken.borrow(INITIAL_LENDING_BORROW);
     }
 
     function _isDuplicate(address account, address[] memory accounts, uint256 index) internal pure returns (bool) {
