@@ -53,6 +53,10 @@ contract FullSetupLocal is Script {
     // Mint amount for test accounts
     uint256 internal constant INITIAL_BALANCE = 100_000e18;
 
+    // Local mining seed values (ensure APR/APY are not null)
+    uint256 internal constant INITIAL_STAKE_AMOUNT = 10_000e18;
+    uint256 internal constant INITIAL_MINING_REWARD = 100e18;
+
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
@@ -211,6 +215,10 @@ contract FullSetupLocal is Script {
         _mintToTestAccounts(usdc, deployer);
         _mintToTestAccounts(weth, deployer);
 
+        // 13) Seed liquidity mining with rewards + stake (non-null APR/APY)
+        _seedLiquidityMining(usdc, dUSDC, usdcMining, governanceToken);
+        _seedLiquidityMining(weth, dWETH, wethMining, governanceToken);
+
         vm.stopBroadcast();
 
         // Summary
@@ -246,6 +254,25 @@ contract FullSetupLocal is Script {
             if (account != deployer && _isDuplicate(account, accounts, i)) continue;
             token.mint(account, INITIAL_BALANCE);
         }
+    }
+
+    function _seedLiquidityMining(
+        MockERC20 underlying,
+        LendingToken dToken,
+        LiquidityMining mining,
+        GovernanceToken rewardsToken
+    ) internal {
+        // Fund rewards and start distribution
+        rewardsToken.mint(address(mining), INITIAL_MINING_REWARD);
+        mining.notifyRewardAmount(INITIAL_MINING_REWARD);
+
+        // Supply underlying to receive dTokens
+        underlying.approve(address(dToken), INITIAL_STAKE_AMOUNT);
+        dToken.mint(INITIAL_STAKE_AMOUNT);
+
+        // Stake dTokens into mining
+        dToken.approve(address(mining), INITIAL_STAKE_AMOUNT);
+        mining.stake(INITIAL_STAKE_AMOUNT);
     }
 
     function _isDuplicate(address account, address[] memory accounts, uint256 index) internal pure returns (bool) {
