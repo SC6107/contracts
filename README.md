@@ -36,6 +36,7 @@ Top level:
 - `src/` protocol contracts
 - `test/` unit and integration tests
 - `script/` deploy and upgrade scripts
+- `docs/` architecture artifacts
 - `lib/` external dependencies (OpenZeppelin, forge-std)
 - `foundry.toml` Foundry config
 
@@ -130,7 +131,7 @@ UUPS (Universal Upgradeable Proxy Standard) keeps a thin proxy at a stable addre
 1. Governance proposes an upgrade (new implementation address).
 2. Proposal passes voting and is queued in the timelock.
 3. Timelock executes `upgradeToAndCall` on the proxy.
-4. `_authorizeUpgrade(...)` validates the caller (governance/timelock).
+4. `_authorizeUpgrade(...)` validates the caller (owner/governance/admin role, depending on contract).
 
 **Storage layout rules**
 - State is isolated in `*Storage.sol` libraries.
@@ -293,9 +294,10 @@ forge test --match-path test/integration/FullProtocol.t.sol
 
 | Script | Description |
 |--------|-------------|
-| `script/DeployProtocol.s.sol` | Production deployment script for all protocol contracts |
-| `script/deploy_local.sh` | Shell script to deploy locally (assumes Anvil is running) |
-| `script/FullSetupLocal.s.sol` | Full local setup: mocks + oracle + comptroller + lending tokens + governance + mining. Mints test tokens to Anvil accounts |
+| `script/DeployProtocol.s.sol` | Deploys core protocol proxies and governance contracts (no markets/mocks) |
+| `script/FullSetupLocal.s.sol` | Full setup with mocks + oracle + comptroller + dUSDC/dWETH + governance + mining, then seeds initial balances/positions |
+| `script/deploy_local.sh` | Local orchestrator for `DeployProtocol` / `FullSetupLocal` (Anvil must already be running) |
+| `script/deploy_sepolia.sh` | Sepolia orchestrator with retries, optional verify, optional governance setup and governance upgrade phases |
 
 ### Upgrades
 
@@ -303,7 +305,17 @@ forge test --match-path test/integration/FullProtocol.t.sol
 |--------|-------------|
 | `script/UpgradeProtocol.s.sol` | Upgrade script for UUPS proxies |
 | `script/test_upgrade_local.sh` | Local upgrade test helper |
-| `script/upgrade_network.sh` | Direct UUPS upgrade on live network (owner key required) |
+| `script/upgrade_network.sh` | Direct UUPS upgrade by kind (`price_oracle`, `comptroller`, `lending_token`, `governance_token`, `liquidity_mining`) |
+
+### Governance Flow Scripts
+
+| Script | Description |
+|--------|-------------|
+| `script/prepare_governance_voters.s.sol` | Mints/delegates GOV for Alice/Bob/Carol and funds gas for voting wallets |
+| `script/prepare_governance_voters.sh` | Resolves addresses from broadcast and runs voter preparation |
+| `script/repro_governance_upgrade_flow.s.sol` | Phase-based governance upgrade logic (`prepare`, `propose`, `vote`, `queue`, `execute`) |
+| `script/repro_governance_upgrade_flow.sh` | Wrapper for scripted governance phases (supports local `all` mode with time auto-advance) |
+| `script/repro_governance_upgrade_flow_with_sleep.sh` | Real-time governance flow runner for public networks with polling/retry/sleeps |
 
 ### Reproduction / Demo Scripts
 
@@ -319,25 +331,31 @@ forge test --match-path test/integration/FullProtocol.t.sol
 | Script | Description |
 |--------|-------------|
 | `script/quick_extract_local.sh` | Extracts deployed contract addresses from `broadcast/FullSetupLocal.s.sol/*/run-latest.json`. Outputs environment variables for all proxies, underlying tokens, and feeds |
+| `script/quick_extract_governance.sh` | Extracts governance-related addresses (PriceOracle/GOV/Timelock/Governor) from `FullSetupLocal` broadcast JSON |
 
 ### Usage Examples
 
 Run a script:
 ```shell
-forge script script/DeployProtocol.s.sol:DeployProtocolScript --rpc-url <RPC> --private-key <KEY>
+forge script script/DeployProtocol.s.sol:DeployProtocol \
+  --rpc-url <RPC_URL> \
+  --private-key <PRIVATE_KEY> \
+  --broadcast
 ```
 
 Run an upgrade (example: PriceOracle):
 ```shell
 forge script script/UpgradeProtocol.s.sol:UpgradeProtocol \
   --sig "upgradePriceOracle(address)" <PROXY_ADDRESS> \
-  --rpc-url <RPC> --private-key <KEY>
+  --rpc-url <RPC_URL> \
+  --private-key <PRIVATE_KEY> \
+  --broadcast
 ```
 
 Network upgrade (direct UUPS call):
 ```shell
-RPC_URL=<RPC> \
-PRIVATE_KEY=<DEPLOYER_PK> \
+RPC_URL=<RPC_URL> \
+PRIVATE_KEY=<PRIVATE_KEY> \
 PROXY_ADDRESS=<PROXY_ADDRESS> \
 UPGRADE_KIND=price_oracle \
 CONFIRM_NETWORK=YES \
@@ -347,16 +365,51 @@ Notes:
 - This only works if the proxy owner is the key you provide.
 - In production, upgrades should go through governance + timelock.
 
-Local deploy (Anvil):
+Local full setup (Anvil):
 ```shell
 # Terminal 1
 anvil
 
 # Terminal 2
+FULL_SETUP=1 \
+PREPARE_GOVERNANCE_VOTERS=1 \
 script/deploy_local.sh
 ```
 Notes:
-- `script/deploy_local.sh` assumes Anvil is already running.
+- `script/deploy_local.sh` does not start Anvil; start it manually first.
+
+Sepolia deployment/full setup:
+```shell
+SEPOLIA_RPC_URL=<SEPOLIA_RPC_URL> \
+PRIVATE_KEY=<PRIVATE_KEY> \
+ETHERSCAN_API_KEY=<ETHERSCAN_API_KEY> \
+VERIFY=1 \
+FULL_SETUP=1 \
+CONFIRM_NETWORK=YES \
+script/deploy_sepolia.sh
+```
+
+Prepare governance voters from latest `FullSetupLocal` broadcast:
+```shell
+RPC_URL=<RPC_URL> script/prepare_governance_voters.sh
+```
+
+Run full governance upgrade flow on local Anvil (all phases):
+```shell
+RPC_URL=<RPC_URL> \
+GOVERNANCE_PHASE=all \
+AUTO_ADVANCE_TIME=1 \
+script/repro_governance_upgrade_flow.sh
+```
+
+Run governance flow on Sepolia one phase at a time:
+```shell
+RPC_URL=<SEPOLIA_RPC_URL> GOVERNANCE_PHASE=prepare script/repro_governance_upgrade_flow.sh
+RPC_URL=<SEPOLIA_RPC_URL> GOVERNANCE_PHASE=propose script/repro_governance_upgrade_flow.sh
+RPC_URL=<SEPOLIA_RPC_URL> GOVERNANCE_PHASE=vote script/repro_governance_upgrade_flow.sh
+RPC_URL=<SEPOLIA_RPC_URL> GOVERNANCE_PHASE=queue script/repro_governance_upgrade_flow.sh
+RPC_URL=<SEPOLIA_RPC_URL> GOVERNANCE_PHASE=execute script/repro_governance_upgrade_flow.sh
+```
 
 Local upgrade test (assumes deployed):
 ```shell
@@ -396,7 +449,7 @@ Goal: show a full deposit → borrow → interest accrual → repay → withdraw
 1. Alice supplies liquidity by minting 10,000 dUSDC (`dUSDC.mint(10000e18)`), which transfers 10,000 USDC into the pool and mints 10,000 receipt tokens.
 2. Bob supplies 5 WETH as collateral, enters the WETH market, and enables borrowing.
 3. Bob borrows 5,000 USDC against his collateral. His wallet now holds `INITIAL_BALANCE + 5000e18` USDC.
-4. The test fast‑forwards 365 days, refreshes oracle feeds, and accrues interest on dUSDC. Bob’s debt increases above 5,000 USDC.
+4. The test fast‑forwards 365 days and accrues interest on dUSDC. Bob’s debt increases above 5,000 USDC.
 5. Bob repays his full debt with `repayBorrow(type(uint256).max)` and his borrow balance goes to zero.
 6. Alice redeems all dUSDC. Because interest accrued, her withdrawal is greater than 10,000 USDC.
 
