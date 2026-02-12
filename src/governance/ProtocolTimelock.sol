@@ -28,8 +28,8 @@ contract ProtocolTimelock is Initializable, UUPSUpgradeable, TimelockControllerU
         }
     }
 
-    /// @notice Minimum delay for timelock operations (24 hours)
-    uint256 public constant MIN_DELAY = 24 hours;
+    /// @notice Minimum delay for timelock operations
+    uint256 public constant MIN_DELAY = 1 seconds;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -38,7 +38,7 @@ contract ProtocolTimelock is Initializable, UUPSUpgradeable, TimelockControllerU
 
     /**
      * @notice Initializes the timelock controller
-     * @param minDelay_ Minimum delay for operations (must be >= 24 hours)
+     * @param minDelay_ Minimum delay for operations (must be >= MIN_DELAY)
      * @param proposers_ Addresses that can propose operations
      * @param executors_ Addresses that can execute operations
      * @param admin_ Admin address (can grant/revoke roles)
