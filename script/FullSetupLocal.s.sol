@@ -44,9 +44,9 @@ contract FullSetupLocal is Script {
     // Governance / mining config
     uint256 internal constant GOV_TOKEN_MAX_SUPPLY = 100_000_000e18;
     uint256 internal constant REWARDS_DURATION = 30 days;
-    uint256 internal constant TIMELOCK_DELAY = 1 days;
-    uint48 internal constant VOTING_DELAY = 1 days;
-    uint32 internal constant VOTING_PERIOD = 1 weeks;
+    uint256 internal constant TIMELOCK_DELAY = 10 seconds;
+    uint48 internal constant VOTING_DELAY = 30 seconds;
+    uint32 internal constant VOTING_PERIOD = 120 seconds;
     uint256 internal constant PROPOSAL_THRESHOLD = 100_000e18;
     uint256 internal constant QUORUM_PERCENTAGE = 4;
 

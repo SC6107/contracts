@@ -14,6 +14,7 @@ START_ANVIL=${START_ANVIL:-0}
 ANVIL_FOREGROUND=${ANVIL_FOREGROUND:-0}
 DEPLOY_PROTOCOL=${DEPLOY_PROTOCOL:-0}
 FULL_SETUP=${FULL_SETUP:-1}
+PREPARE_GOVERNANCE_VOTERS=${PREPARE_GOVERNANCE_VOTERS:-${FULL_SETUP}}
 
 cleanup() {
   if [[ "${KEEP_ANVIL_RUNNING}" == "1" ]]; then
@@ -43,6 +44,10 @@ if [[ "${FULL_SETUP}" == "1" ]]; then
   forge script script/FullSetupLocal.s.sol:FullSetupLocal \
     --rpc-url "${RPC_URL}" \
     --broadcast
+fi
+
+if [[ "${PREPARE_GOVERNANCE_VOTERS}" == "1" ]]; then
+  RPC_URL="${RPC_URL}" script/prepare_governance_voters.sh
 fi
 
 if [[ -n "${ANVIL_PID}" && "${KEEP_ANVIL_RUNNING}" == "1" ]]; then

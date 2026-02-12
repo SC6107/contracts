@@ -33,9 +33,9 @@ contract DeployProtocol is Script {
     uint256 public constant INITIAL_EXCHANGE_RATE = 1e18; // 1:1 initially
     uint256 public constant GOV_TOKEN_MAX_SUPPLY = 100_000_000e18; // 100M tokens
     uint256 public constant REWARDS_DURATION = 30 days;
-    uint256 public constant TIMELOCK_DELAY = 24 hours;
-    uint48 public constant VOTING_DELAY = 1 days;
-    uint32 public constant VOTING_PERIOD = 1 weeks;
+    uint256 public constant TIMELOCK_DELAY = 10 seconds;
+    uint48 public constant VOTING_DELAY = 30 seconds;
+    uint32 public constant VOTING_PERIOD = 120 seconds;
     uint256 public constant PROPOSAL_THRESHOLD = 100_000e18; // 100k tokens
     uint256 public constant QUORUM_PERCENTAGE = 4; // 4%
 
